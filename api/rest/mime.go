@@ -241,6 +241,26 @@ var contentTypes = map[string]contentType{
 			return newMultipartEncoder(w).Encode(v)
 		},
 	},
+	"application/octet-stream": {
+		Encode: func(w http.ResponseWriter, v any) error {
+			closer, ok := v.(io.Closer)
+			if ok && closer != nil {
+				defer closer.Close()
+			}
+			if reader, ok := v.(io.Reader); ok {
+				_, err := io.Copy(w, reader)
+				return xray.New(err)
+			}
+			return xray.New(fmt.Errorf("cannot encode type %T as application/octet-stream", v))
+		},
+		Decode: func(r io.Reader, v any) error {
+			if writer, ok := v.(io.Writer); ok {
+				_, err := io.Copy(writer, r)
+				return xray.New(err)
+			}
+			return xray.New(fmt.Errorf("cannot decode type %T as application/octet-stream", v))
+		},
+	},
 	"application/json+schema": {
 		Encode: func(w http.ResponseWriter, v any) error {
 			if err := json.NewEncoder(w).Encode(schemaFor(nil, v)); err != nil {
