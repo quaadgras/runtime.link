@@ -255,9 +255,6 @@ func link(client *http.Client, spec specification, host string) error {
 				op = operation
 				fn = op.Function
 			)
-			if debug {
-				fmt.Println(path, fn.Name)
-			}
 			var (
 				method = string(method) //Determine the HTTP method of this request.
 				path   = rtags.CleanupPattern(path)
@@ -269,7 +266,7 @@ func link(client *http.Client, spec specification, host string) error {
 					return nil, fmt.Errorf("failed to call %v, %s host URL is empty", path, spec.Name)
 				}
 				results = make([]reflect.Value, fn.NumOut())
-				
+
 				var hasChannel bool
 				var sendChan, recvChan reflect.Value
 				for i := 0; i < fn.NumOut(); i++ {
@@ -288,7 +285,7 @@ func link(client *http.Client, spec specification, host string) error {
 						}
 					}
 				}
-				
+
 				if hasChannel {
 					//body buffers what we will be sending to the endpoint.
 					var writer = new(bytes.Buffer)
@@ -300,18 +297,18 @@ func link(client *http.Client, spec specification, host string) error {
 					if err != nil {
 						return nil, err
 					}
-					
+
 					req, err := http.NewRequestWithContext(ctx, "GET", host+endpoint, nil)
 					if err != nil {
 						return nil, err
 					}
 					maps.Copy(req.Header, headers)
-					
+
 					req.Header.Add("Accept", "text/event-stream, application/json")
 					websocketOpen(ctx, client, req, sendChan, recvChan)
 					return results, nil
 				}
-				
+
 				//body buffers what we will be sending to the endpoint.
 				var writer = new(bytes.Buffer)
 				//Figure out the REST endpoint to send a request to.
