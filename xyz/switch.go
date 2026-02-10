@@ -74,7 +74,7 @@ func (v *switchMethods[Storage, Values]) GobDecode(data []byte) error {
 // UnmarshalJSON implements [json.Unmarshaler].
 func (v *switchMethods[Storage, Values]) UnmarshalJSON(data []byte) error {
 	if data[0] == '"' && reflect.TypeOf(v.ram).Kind() != reflect.String {
-		rtype := reflect.TypeOf([0]Values{}).Elem()
+		rtype := reflect.TypeFor[Values]()
 		var s string
 		if err := json.Unmarshal(data, &s); err != nil {
 			return err
@@ -127,7 +127,7 @@ func (v *switchMethods[Storage, Values]) UnmarshalJSON(data []byte) error {
 
 // MarshalText implements [encoding.TextMarshaler].
 func (v switchMethods[Storage, Values]) MarshalText() ([]byte, error) {
-	rtype := reflect.TypeOf([0]Values{}).Elem()
+	rtype := reflect.TypeFor[Values]()
 	for i := 0; i < rtype.NumField(); i++ {
 		field := rtype.Field(i)
 		name, ok := field.Tag.Lookup("json")
@@ -162,13 +162,13 @@ func (v switchMethods[Storage, Values]) MarshalText() ([]byte, error) {
 			}
 		}
 	}
-	return []byte(fmt.Sprint(v.ram)), nil
+	return fmt.Append(nil, v.ram), nil
 }
 
 // UnmarshalText implements [encoding.TextUnmarshaler].
 func (v *switchMethods[Storage, Values]) UnmarshalText(data []byte) error {
 	if reflect.TypeOf(v.ram).Kind() != reflect.String {
-		rtype := reflect.TypeOf([0]Values{}).Elem()
+		rtype := reflect.TypeFor[Values]()
 		for i := 0; i < rtype.NumField(); i++ {
 			field := rtype.Field(i)
 			name, ok := field.Tag.Lookup("json")
