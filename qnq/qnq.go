@@ -79,9 +79,10 @@ func (ch *Chan[T]) Send(ctx context.Context, value T) error {
 		if err := ch.impl.Send(ctx, ch.name, value); err != nil {
 			return err
 		}
-	}
-	if err := ch.fast.send(ctx, value); err != nil && (err != ErrEmptyChannel || ch.impl == nil) {
-		return err
+	} else {
+		if err := ch.fast.send(ctx, value); err != nil && (err != ErrEmptyChannel || ch.impl == nil) {
+			return err
+		}
 	}
 	return nil
 }
@@ -100,7 +101,6 @@ func (ch *Chan[T]) Send(ctx context.Context, value T) error {
 // always process incoming messages idempotently, as they may be delivered
 // more than once.
 func (ch *Chan[T]) Listen(ctx context.Context, subscription string, listener Listener[T]) {
-	ch.fast.register(ctx, listener)
 	if ch.impl != nil {
 		go func() {
 			for fn := range ch.impl.Recv(ctx, ch.name, subscription) {
@@ -113,6 +113,8 @@ func (ch *Chan[T]) Listen(ctx context.Context, subscription string, listener Lis
 				ack(listener(ctx, message))
 			}
 		}()
+	} else {
+		ch.fast.register(ctx, listener)
 	}
 }
 
