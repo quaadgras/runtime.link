@@ -137,10 +137,23 @@ func Open[T any](db Channels) *T {
 	for i := range rtype.NumField() {
 		field := rtype.Field(i)
 		if topic, ok := field.Tag.Lookup("qnq"); ok {
-			value.Field(i).Addr().Interface().(opener).open(db, Topic(topic))
+			if field.Type.Kind() == reflect.Pointer {
+				value.Field(i).Set(reflect.New(field.Type.Elem()))
+				value.Field(i).Interface().(opener).open(db, Topic(topic))
+			} else {
+				value.Field(i).Addr().Interface().(opener).open(db, Topic(topic))
+			}
 		}
 	}
 	return &zero
+}
+
+// OpenChan opens a single [Chan] with the given [Channels] implementation and topic name.
+// This is useful when different channels in a struct need different backends.
+func OpenChan[T any](db Channels, name Topic) *Chan[T] {
+	var ch Chan[T]
+	ch.open(db, name)
+	return &ch
 }
 
 // Listener for values of type Message on a [Chan].
