@@ -134,6 +134,26 @@ func TestSliceParams(t *testing.T) {
 ]` {
 		t.Fatal("unexpected body: ", rec.Body.String())
 	}
+
+	// single element with [] suffix
+	req = httptest.NewRequest("POST", "/echo?strings[]=hello", nil)
+	rec = httptest.NewRecorder()
+	Handler.ServeHTTP(rec, req)
+	if rec.Code != 200 || rec.Body.String() != `[
+	"hello"
+]` {
+		t.Fatal("unexpected body for single []: ", rec.Body.String())
+	}
+
+	// single element without [] suffix
+	req = httptest.NewRequest("POST", "/echo?strings=hello", nil)
+	rec = httptest.NewRecorder()
+	Handler.ServeHTTP(rec, req)
+	if rec.Code != 200 || rec.Body.String() != `[
+	"hello"
+]` {
+		t.Fatal("unexpected body for non-[]: ", rec.Body.String())
+	}
 }
 
 func TestSpecificity(t *testing.T) {

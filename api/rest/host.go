@@ -732,9 +732,14 @@ func attach(auth api.Auth[*http.Request], yield func(string, http.Handler) bool,
 						ref = deref.Addr()
 					}
 					var items = 1
+					var isSlice bool
 					if deref.Kind() == reflect.Slice {
+						isSlice = true
 						if param.Location&parameterInQuery != 0 {
 							items = len(r.URL.Query()[param.Name+"[]"])
+							if items == 0 {
+								items = len(r.URL.Query()[param.Name])
+							}
 							deref.Set(reflect.MakeSlice(deref.Type(), items, items))
 						}
 					}
@@ -765,7 +770,7 @@ func attach(auth api.Auth[*http.Request], yield func(string, http.Handler) bool,
 					for val := ""; idx < items; idx++ {
 						deref := deref
 						ref := ref
-						if items > 1 {
+						if isSlice {
 							ref = deref.Index(idx).Addr()
 							deref = deref.Index(idx)
 						}
@@ -773,8 +778,11 @@ func attach(auth api.Auth[*http.Request], yield func(string, http.Handler) bool,
 							val = r.PathValue(param.Name)
 						}
 						if param.Location&parameterInQuery != 0 {
-							if items > 1 {
+							if isSlice {
 								vals := r.URL.Query()[param.Name+"[]"]
+								if len(vals) == 0 {
+									vals = r.URL.Query()[param.Name]
+								}
 								if idx < len(vals) {
 									val = vals[idx]
 								}
