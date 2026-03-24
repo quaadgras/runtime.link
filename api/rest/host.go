@@ -366,7 +366,6 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 					handle(r.Context(), api.Function{}, auth, w, err)
 					return
 				}
-				r = r.WithContext(ctx)
 			}
 			if strings.Contains(r.Header.Get("Accept"), "application/json") {
 				w.Header().Set("Content-Type", "application/json")
@@ -683,7 +682,6 @@ func attach(auth api.Auth[*http.Request], yield func(string, http.Handler) bool,
 						handle(ctx, fn, auth, w, err)
 						return
 					}
-					r = r.WithContext(ctx)
 				}
 				if op.DefaultContentType != "text/html" && method == "GET" && strings.Contains(r.Header.Get("Accept"), "text/html") || strings.Contains(r.Header.Get("Accept"), "application/schema+json") {
 					formHandler{res: resource}.ServeHTTP(w, r)
