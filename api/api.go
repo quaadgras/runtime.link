@@ -64,12 +64,18 @@ func Export[API, H, Options any](exporter Exporter[H, Options], impl API, option
 // allowed to access the given function. Used to implement
 // authentication and authorisation for API calls.
 type Auth[Conn any] interface {
-	// AssertHeader is called before the request is processed it
+	// Authenticate is called before the request is processed it
 	// should confirm the identify of the caller. The context
 	// returned will be passed to the function being called. If
 	// the identity shouldn't know about the Function, return
 	// an error here.
-	Authenticate(Conn, Function) (context.Context, error)
+	//
+	// Authenticate may be called multiple times for the same
+	// [Conn] but any number of different [Function] parameters,
+	// the context returned by the first call, may be fed into
+	// any subsequent calls, so cache any expensive lookups and
+	// reuse them where possible.
+	Authenticate(context.Context, Conn, Function) (context.Context, error)
 
 	// AssertAccess is called after arguments have been passed
 	// and before the function is called. It should assert that

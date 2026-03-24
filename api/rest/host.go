@@ -332,23 +332,8 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 	if err != nil {
 		return nil, xray.New(err)
 	}
-	docs, err := oasDocumentOf(spec.Structure)
-	if err != nil {
-		return nil, xray.New(err)
-	}
-	if docs.Information.Title == "" {
-		rtype := reflect.TypeOf(impl)
-		docs.Information.Title = oas.Readable(path.Base(rtype.PkgPath()) + " " + rtype.Name())
-	}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetIndent("", "  ")
-	enc.Encode(docs)
-	code, err := sdkFor(docs)
-	if err != nil {
-		return nil, xray.New(err)
-	}
 	return func(yield func(string, http.Handler) bool) {
+		var err error
 		if param_format != "{%s}" {
 			old_yield := yield
 			yield = func(pattern string, handler http.Handler) bool {
@@ -368,9 +353,11 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 			}
 		}
 		if !yield("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
 			if auth != nil {
 				addCORS(auth, w, r, api.Function{})
-				if _, err := auth.Authenticate(r, api.Function{}); err != nil {
+				ctx, err = auth.Authenticate(r.Context(), r, api.Function{})
+				if err != nil {
 					if strings.Contains(r.Header.Get("Accept"), "text/html") || strings.Contains(r.Header.Get("Accept"), "application/schema+json") {
 						w.Header().Set("WWW-Authenticate", `Basic realm="restricted"`)
 						http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -379,14 +366,36 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 					handle(r.Context(), api.Function{}, auth, w, err)
 					return
 				}
+				r = r.WithContext(ctx)
 			}
 			if strings.Contains(r.Header.Get("Accept"), "application/json") {
 				w.Header().Set("Content-Type", "application/json")
-				w.Write(buf.Bytes())
+				docs, err := oasDocumentOf(ctx, auth, r, spec.Structure)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				if docs.Information.Title == "" {
+					rtype := reflect.TypeOf(impl)
+					docs.Information.Title = oas.Readable(path.Base(rtype.PkgPath()) + " " + rtype.Name())
+				}
+				enc := json.NewEncoder(w)
+				enc.SetIndent("", "  ")
+				enc.Encode(docs)
 				return
 			}
 			if strings.Contains(r.Header.Get("Accept"), "application/javascript") {
 				w.Header().Set("Content-Type", "application/javascript")
+				docs, err := oasDocumentOf(ctx, auth, r, spec.Structure)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				code, err := sdkFor(docs)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
 				w.Write(code)
 				return
 			}
@@ -669,11 +678,12 @@ func attach(auth api.Auth[*http.Request], yield func(string, http.Handler) bool,
 					}
 				}()
 				if auth != nil {
-					ctx, err = auth.Authenticate(r, fn)
+					ctx, err = auth.Authenticate(r.Context(), r, fn)
 					if err != nil {
 						handle(ctx, fn, auth, w, err)
 						return
 					}
+					r = r.WithContext(ctx)
 				}
 				if op.DefaultContentType != "text/html" && method == "GET" && strings.Contains(r.Header.Get("Accept"), "text/html") || strings.Contains(r.Header.Get("Accept"), "application/schema+json") {
 					formHandler{res: resource}.ServeHTTP(w, r)
