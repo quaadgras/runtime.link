@@ -379,7 +379,7 @@ func link(client *http.Client, spec specification, host string) error {
 				if ctype == "" {
 					ctype = string(op.DefaultContentType)
 				}
-				if ctype == "" {
+				if ctype == "" || ctype == "text/json" {
 					ctype = "application/json"
 				}
 				if shouldClose, err = op.clientRead(ctype, results, resp.Body); err != nil {
