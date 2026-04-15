@@ -113,8 +113,10 @@ func oasDocumentOf(ctx context.Context, auth api.Auth[*http.Request], req *http.
 		spec.Information.Description = oas.Markdown("This API " + structure.Docs)
 	}
 	for _, fn := range structure.Functions {
-		if _, err := auth.Authenticate(ctx, req, fn); err != nil {
-			continue
+		if auth != nil {
+			if _, err := auth.Authenticate(ctx, req, fn); err != nil {
+				continue
+			}
 		}
 		if err := addFunctionTo(&spec, fn, "default"); err != nil {
 			return spec, xray.New(err)
