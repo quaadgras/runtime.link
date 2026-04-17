@@ -592,11 +592,15 @@ func (p *parser) parseQuery(query string, args []reflect.Type) error {
 					var (
 						isTextUnmarshaler = field.Type.Implements(reflect.TypeOf([0]encoding.TextUnmarshaler{}).Elem()) ||
 							reflect.PointerTo(field.Type).Implements(reflect.TypeOf([0]encoding.TextUnmarshaler{}).Elem())
+
+						isStringerScanner = field.Type.Implements(reflect.TypeOf([0]fmt.Stringer{}).Elem()) &&
+							(reflect.PointerTo(field.Type).Implements(reflect.TypeOf([0]fmt.Scanner{}).Elem()) ||
+								field.Type.Implements(reflect.TypeOf([0]fmt.Scanner{}).Elem()))
 					)
 					for field.Type.Kind() == reflect.Ptr {
 						field.Type = field.Type.Elem()
 					}
-					if field.Type.Kind() != reflect.Struct || isTextUnmarshaler {
+					if field.Type.Kind() != reflect.Struct || isTextUnmarshaler || isStringerScanner {
 						p.list = append(p.list, parameter{
 							Name:     name,
 							Type:     field.Type,
