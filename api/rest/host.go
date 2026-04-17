@@ -54,6 +54,9 @@ func fieldByIndex(value reflect.Value, index []int) reflect.Value {
 		if i > 0 {
 			if value.Kind() == reflect.Pointer && value.Type().Elem().Kind() == reflect.Struct {
 				if value.IsNil() {
+					if !value.CanSet() {
+						return reflect.Zero(value.Type().Elem().FieldByIndex(index[i+1:]).Type)
+					}
 					value.Set(reflect.New(value.Type().Elem()))
 				}
 				value = value.Elem()

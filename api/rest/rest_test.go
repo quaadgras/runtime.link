@@ -336,3 +336,53 @@ func TestMapping(t *testing.T) {
 		t.Fatal("unexpected result: ", a, b)
 	}
 }
+
+// TestNilPointerFieldInQuery tests that a struct with a pointer field can be
+// used as a query parameter without panicking when the pointer is nil. This
+// is a regression test for a panic in fieldByIndex when the client tried to
+// Set an unaddressable reflect.Value.
+func TestNilPointerFieldInQuery(t *testing.T) {
+	type Inner struct {
+		Value string `json:"value"`
+	}
+	type Request struct {
+		Name  string `json:"name"`
+		Inner *Inner `json:"inner,omitempty"`
+	}
+	type API struct {
+		api.Specification
+
+		Lookup func(context.Context, Request) (string, error) `rest:"GET /lookup?%v"`
+	}
+	impl := API{
+		Lookup: func(ctx context.Context, req Request) (string, error) {
+			return req.Name, nil
+		},
+	}
+	handler, err := rest.Handler(nil, impl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	client := api.Import[API](rest.API, server.URL, server.Client())
+
+	// Call with nil pointer field — this previously panicked.
+	result, err := client.Lookup(context.Background(), Request{Name: "test", Inner: nil})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "test" {
+		t.Fatalf("got %q, want %q", result, "test")
+	}
+
+	// Call with non-nil pointer field to confirm it still works.
+	result, err = client.Lookup(context.Background(), Request{Name: "hello", Inner: &Inner{Value: "world"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "hello" {
+		t.Fatalf("got %q, want %q", result, "hello")
+	}
+}
