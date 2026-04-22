@@ -19,13 +19,11 @@ import (
 )
 
 // Specification should be embedded in all runtime.link API structures.
-type Specification struct{}
+type Specification = WithSpecification
 
 type WithSpecification interface {
 	specification()
 }
-
-func (Specification) specification() {}
 
 // Linker that can link a runtime.link API structure up to a 'Host'
 // implementation using the specified 'Connection' configuration.
@@ -182,7 +180,7 @@ func StructureOf(val any) Structure {
 		tags, _, _ := strings.Cut(string(field.Tag), "\n")
 		switch field.Type.Kind() {
 		case reflect.Struct:
-			if field.Type == reflect.TypeOf(Specification{}) {
+			if field.Type == reflect.TypeFor[Specification]() {
 				structure.Tags = reflect.StructTag(tags)
 				structure.Docs = DocumentationOf(field)
 				structure.Host = field.Tag
