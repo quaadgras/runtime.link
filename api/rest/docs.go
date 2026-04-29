@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"path"
 	"reflect"
+	runtime_debug "runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -36,29 +37,41 @@ func formatPascalCaseTitle(name string) string {
 }
 
 func handleDocs(r *http.Request, w http.ResponseWriter, _ func(error) error, impl any) {
-	w.Write([]byte("<!DOCTYPE html>"))
-	w.Write(docs_head)
-	w.Write([]byte("<body>"))
 	if documented, ok := impl.(api.WithExamples); ok {
-		examples, err := documented.Examples(r.Context())
-		if err == nil {
-			w.Write([]byte("<nav>"))
-			fmt.Fprintf(w, "<h2><a href=''>API Reference</a></h2>")
-			w.Write([]byte("<h3>Examples</h3>"))
-
-			w.Write([]byte("<div class=\"examples-list\">"))
-			for category, categoryExamples := range examples {
-				fmt.Fprintf(w, "<details class=\"example-category\">")
-				fmt.Fprintf(w, "<summary class=\"category-header\">%s</summary>", strings.Title(category))
-				fmt.Fprintf(w, "<div class=\"category-examples\">")
-				for _, exampleName := range categoryExamples {
-					title := formatPascalCaseTitle(exampleName)
-					fmt.Fprintf(w, "<a href=\"./examples/%v\" class=\"example-link\">%s</a>", exampleName, title)
+		func() {
+			defer func() {
+				w.WriteHeader(500)
+				if err := recover(); err != nil {
+					fmt.Fprintf(w, "panic %s: %s", err, runtime_debug.Stack())
 				}
-				fmt.Fprintf(w, "</div></details>")
+			}()
+			examples, err := documented.Examples(r.Context())
+			if err == nil {
+				w.Write([]byte("<!DOCTYPE html>"))
+				w.Write(docs_head)
+				w.Write([]byte("<body>"))
+				w.Write([]byte("<nav>"))
+				fmt.Fprintf(w, "<h2><a href=''>API Reference</a></h2>")
+				w.Write([]byte("<h3>Examples</h3>"))
+
+				w.Write([]byte("<div class=\"examples-list\">"))
+				for category, categoryExamples := range examples {
+					fmt.Fprintf(w, "<details class=\"example-category\">")
+					fmt.Fprintf(w, "<summary class=\"category-header\">%s</summary>", strings.Title(category))
+					fmt.Fprintf(w, "<div class=\"category-examples\">")
+					for _, exampleName := range categoryExamples {
+						title := formatPascalCaseTitle(exampleName)
+						fmt.Fprintf(w, "<a href=\"./examples/%v\" class=\"example-link\">%s</a>", exampleName, title)
+					}
+					fmt.Fprintf(w, "</div></details>")
+				}
+				w.Write([]byte("</div></nav>"))
 			}
-			w.Write([]byte("</div></nav>"))
-		}
+		}()
+	} else {
+		w.Write([]byte("<!DOCTYPE html>"))
+		w.Write(docs_head)
+		w.Write([]byte("<body>"))
 	}
 	w.Write([]byte("<main id='swagger-ui'>"))
 	w.Write(docs_body)
