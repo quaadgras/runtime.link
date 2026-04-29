@@ -208,10 +208,12 @@ func Test(t *testing.T, impl Documentation) {
 	}
 	for _, categoryExamples := range examples {
 		for _, exampleName := range categoryExamples {
-			example, _ := impl.Example(t.Context(), exampleName)
-			if example.Error != nil {
-				t.Errorf("example %s failed %v", exampleName, example.Error)
-			}
+			t.Run(exampleName, func(t *testing.T) {
+				example, _ := impl.Example(t.Context(), exampleName)
+				if example.Error != nil {
+					t.Errorf("example %s failed %v", exampleName, example.Error)
+				}
+			})
 		}
 	}
 }
