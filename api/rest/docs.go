@@ -24,7 +24,7 @@ import (
 	"runtime.link/xyz"
 )
 
-func formatPascalCaseTitle(name string) string {
+func formatExampleCategory(name string) string {
 	var result strings.Builder
 	for i, r := range name {
 		if i > 0 && r >= 'A' && r <= 'Z' {
@@ -32,7 +32,7 @@ func formatPascalCaseTitle(name string) string {
 		}
 		result.WriteRune(r)
 	}
-	return result.String()
+	return strings.TrimPrefix(result.String(), "examples_")
 }
 
 func handleDocs(r *http.Request, w http.ResponseWriter, _ func(error) error, impl any) {
@@ -52,7 +52,7 @@ func handleDocs(r *http.Request, w http.ResponseWriter, _ func(error) error, imp
 				fmt.Fprintf(w, "<summary class=\"category-header\">%s</summary>", strings.Title(category))
 				fmt.Fprintf(w, "<div class=\"category-examples\">")
 				for _, exampleName := range categoryExamples {
-					title := formatPascalCaseTitle(exampleName)
+					title := formatExampleCategory(exampleName)
 					fmt.Fprintf(w, "<a href=\"./examples/%v\" class=\"example-link\">%s</a>", exampleName, title)
 				}
 				fmt.Fprintf(w, "</div></details>")
