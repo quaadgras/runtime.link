@@ -355,62 +355,79 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 				return old_yield(fmt.Sprintf("%s %s", method, path), handler)
 			}
 		}
-		if !yield("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := r.Context()
-			if auth != nil {
-				addCORS(auth, w, r, api.Function{})
-				ctx, err = auth.Authenticate(r.Context(), r, api.Function{})
-				if err != nil {
-					if strings.Contains(r.Header.Get("Accept"), "text/html") || strings.Contains(r.Header.Get("Accept"), "application/schema+json") {
-						w.Header().Set("WWW-Authenticate", `Basic realm="restricted"`)
-						http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		// docsHandler serves the OpenAPI spec (JSON), the generated SDK
+		// (JavaScript) and the Swagger UI / examples nav (HTML). It is
+		// mounted at both "/" and "/documentation"; "/" responds with a
+		// 302 redirect to "./documentation" for HTML requests so that
+		// the relative example links emitted by handleDocs (e.g.
+		// "./examples/Ordering") resolve to "<prefix>/examples/Ordering"
+		// regardless of the parent mount point.
+		docsHandler := func(redirectHTML bool) http.HandlerFunc {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ctx := r.Context()
+				if auth != nil {
+					addCORS(auth, w, r, api.Function{})
+					ctx, err = auth.Authenticate(r.Context(), r, api.Function{})
+					if err != nil {
+						if strings.Contains(r.Header.Get("Accept"), "text/html") || strings.Contains(r.Header.Get("Accept"), "application/schema+json") {
+							w.Header().Set("WWW-Authenticate", `Basic realm="restricted"`)
+							http.Error(w, "Unauthorized", http.StatusUnauthorized)
+							return
+						}
+						handle(r.Context(), api.Function{}, auth, w, err)
 						return
 					}
-					handle(r.Context(), api.Function{}, auth, w, err)
+				}
+				if strings.Contains(r.Header.Get("Accept"), "application/json") {
+					w.Header().Set("Content-Type", "application/json")
+					docs, err := oasDocumentOf(ctx, auth, r, spec.Structure)
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusInternalServerError)
+						return
+					}
+					if docs.Information.Title == "" {
+						rtype := reflect.TypeOf(impl)
+						docs.Information.Title = oas.Readable(path.Base(rtype.PkgPath()) + " " + rtype.Name())
+					}
+					enc := json.NewEncoder(w)
+					enc.SetIndent("", "  ")
+					enc.Encode(docs)
 					return
 				}
-			}
-			if strings.Contains(r.Header.Get("Accept"), "application/json") {
-				w.Header().Set("Content-Type", "application/json")
-				docs, err := oasDocumentOf(ctx, auth, r, spec.Structure)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
+				if strings.Contains(r.Header.Get("Accept"), "application/javascript") {
+					w.Header().Set("Content-Type", "application/javascript")
+					docs, err := oasDocumentOf(ctx, auth, r, spec.Structure)
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusInternalServerError)
+						return
+					}
+					code, err := sdkFor(docs)
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusInternalServerError)
+						return
+					}
+					w.Write(code)
 					return
 				}
-				if docs.Information.Title == "" {
-					rtype := reflect.TypeOf(impl)
-					docs.Information.Title = oas.Readable(path.Base(rtype.PkgPath()) + " " + rtype.Name())
+				if strings.Contains(r.Header.Get("Accept"), "text/html") {
+					if redirectHTML {
+						http.Redirect(w, r, "./documentation", http.StatusFound)
+						return
+					}
+					w.Header().Set("Content-Type", "text/html")
+					handleDocs(r, w, func(err error) error {
+						return auth.Redact(r.Context(), err)
+					}, impl)
+					return
 				}
-				enc := json.NewEncoder(w)
-				enc.SetIndent("", "  ")
-				enc.Encode(docs)
+				w.WriteHeader(http.StatusNotFound)
 				return
-			}
-			if strings.Contains(r.Header.Get("Accept"), "application/javascript") {
-				w.Header().Set("Content-Type", "application/javascript")
-				docs, err := oasDocumentOf(ctx, auth, r, spec.Structure)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-				code, err := sdkFor(docs)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-				w.Write(code)
-				return
-			}
-			if strings.Contains(r.Header.Get("Accept"), "text/html") {
-				w.Header().Set("Content-Type", "text/html")
-				handleDocs(r, w, func(err error) error {
-					return auth.Redact(r.Context(), err)
-				}, impl)
-				return
-			}
-			w.WriteHeader(http.StatusNotFound)
+			})
+		}
+		if !yield("GET /", docsHandler(true)) {
 			return
-		})) {
+		}
+		if !yield("GET /documentation", docsHandler(false)) {
 			return
 		}
 		if documented, ok := impl.(api.WithExamples); ok {
@@ -428,7 +445,7 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 				examples, err := documented.Examples(r.Context())
 				if err == nil {
 					w.Write([]byte("<nav>"))
-					fmt.Fprintf(w, "<h2><a href=\"../\">← API Reference</a></h2>")
+					fmt.Fprintf(w, "<h2><a href=\"../documentation\">← API Reference</a></h2>")
 					w.Write([]byte("<h3>Examples</h3>"))
 
 					w.Write([]byte("<div class=\"examples-list\">"))
