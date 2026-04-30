@@ -459,7 +459,7 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 						fmt.Fprintf(w, "<summary class=\"category-header\">%s</summary>", strings.Title(category))
 						fmt.Fprintf(w, "<div class=\"category-examples\">")
 						for _, exampleName := range categoryExamples {
-							title := formatPascalCaseTitle(exampleName)
+							title := formatExampleCategory(exampleName)
 							if exampleName == name {
 								fmt.Fprintf(w, "<a href=\"%v\" class=\"example-link current-example\">%s</a>", exampleName, title)
 							} else {
