@@ -419,7 +419,22 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 			return
 		})
 		if !yield("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, "./documentation", http.StatusFound)
+			// Build an absolute redirect target so the client lands on
+			// "<original-path>/documentation" regardless of how the
+			// docs handler is mounted (subpath-stripped at "/echannel"
+			// or hosted at the root). Relative redirects ("./documentation")
+			// fail when the original request had no trailing slash
+			// because the resolver drops the last non-slash segment.
+			target := r.RequestURI
+			if target == "" {
+				target = r.URL.Path
+			}
+			// Strip query string; we don't propagate it to /documentation.
+			if i := strings.IndexByte(target, '?'); i >= 0 {
+				target = target[:i]
+			}
+			target = strings.TrimSuffix(target, "/") + "/documentation"
+			http.Redirect(w, r, target, http.StatusFound)
 		})) {
 			return
 		}
