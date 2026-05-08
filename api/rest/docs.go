@@ -49,7 +49,7 @@ func handleDocs(r *http.Request, w http.ResponseWriter, _ func(error) error, imp
 			w.Write([]byte("<div class=\"examples-list\">"))
 			for category, categoryExamples := range examples {
 				fmt.Fprintf(w, "<details class=\"example-category\">")
-				fmt.Fprintf(w, "<summary class=\"category-header\">%s</summary>", strings.Title(category))
+				fmt.Fprintf(w, "<summary class=\"category-header\">%s</summary>", strings.Title(formatExampleCategory(category)))
 				fmt.Fprintf(w, "<div class=\"category-examples\">")
 				for _, exampleName := range categoryExamples {
 					title := formatExampleCategory(exampleName)
