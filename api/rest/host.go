@@ -450,6 +450,13 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 					http.NotFound(w, r)
 					return
 				}
+				// Surface example failures (test errors or panics) as
+				// HTTP 500 so AOT bake pipelines can fail the build
+				// while still receiving the rendered HTML in the
+				// response body for inspection.
+				if example.Error != nil || example.Panic {
+					w.WriteHeader(http.StatusInternalServerError)
+				}
 				w.Write([]byte("<!DOCTYPE html>"))
 				w.Write(docs_head)
 				w.Write([]byte("<body>"))
