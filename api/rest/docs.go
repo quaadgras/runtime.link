@@ -25,14 +25,17 @@ import (
 )
 
 func formatExampleCategory(name string) string {
+	name = strings.TrimPrefix(name, "examples_")
 	var result strings.Builder
 	for i, r := range name {
-		if i > 0 && r >= 'A' && r <= 'Z' {
+		if i == 0 && r >= 'a' && r <= 'z' {
+			r = r - 'a' + 'A'
+		} else if i > 0 && r >= 'A' && r <= 'Z' {
 			result.WriteRune(' ')
 		}
 		result.WriteRune(r)
 	}
-	return strings.TrimPrefix(result.String(), "examples_")
+	return result.String()
 }
 
 func handleDocs(r *http.Request, w http.ResponseWriter, _ func(error) error, impl any) {
@@ -49,7 +52,7 @@ func handleDocs(r *http.Request, w http.ResponseWriter, _ func(error) error, imp
 			w.Write([]byte("<div class=\"examples-list\">"))
 			for category, categoryExamples := range examples {
 				fmt.Fprintf(w, "<details class=\"example-category\">")
-				fmt.Fprintf(w, "<summary class=\"category-header\">%s</summary>", strings.Title(formatExampleCategory(category)))
+				fmt.Fprintf(w, "<summary class=\"category-header\">%s</summary>", formatExampleCategory(category))
 				fmt.Fprintf(w, "<div class=\"category-examples\">")
 				for _, exampleName := range categoryExamples {
 					title := formatExampleCategory(exampleName)
