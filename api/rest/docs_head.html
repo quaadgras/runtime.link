@@ -18,9 +18,21 @@
     </script>
     <script src="https://cdn.jsdelivr.net/npm/marked@latest/marked.min.js"></script>
     <script>
+        function dedent(text) {
+            var lines = text.split("\n");
+            if (lines[0].trim() === "") lines.shift();
+            var prefix = "";
+            if (lines.length > 0) {
+                prefix = lines[0].match(/^[ \t]*/)[0];
+            }
+            return lines.map(function (line) {
+                if (line.startsWith(prefix)) return line.slice(prefix.length);
+                return line;
+            }).join("\n");
+        }
         document.addEventListener("DOMContentLoaded", function () {
             document.querySelectorAll(".markdown").forEach(function (el) {
-                el.innerHTML = marked.parse(el.textContent);
+                el.innerHTML = marked.parse(dedent(el.textContent));
             });
         });
     </script>
