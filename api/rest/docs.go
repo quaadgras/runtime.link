@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"path"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -27,11 +28,21 @@ import (
 func formatExampleCategory(name string) string {
 	name = strings.TrimPrefix(name, "examples_")
 	var result strings.Builder
-	for i, r := range name {
-		if i == 0 && r >= 'a' && r <= 'z' {
-			r = r - 'a' + 'A'
-		} else if i > 0 && r >= 'A' && r <= 'Z' {
+	capitalizeNext := true
+	for _, r := range name {
+		if r == '_' {
 			result.WriteRune(' ')
+			capitalizeNext = true
+			continue
+		}
+		if capitalizeNext && r >= 'a' && r <= 'z' {
+			r = r - 'a' + 'A'
+			capitalizeNext = false
+		} else if r >= 'A' && r <= 'Z' && result.Len() > 0 {
+			result.WriteRune(' ')
+			capitalizeNext = false
+		} else {
+			capitalizeNext = false
 		}
 		result.WriteRune(r)
 	}
@@ -50,7 +61,15 @@ func handleDocs(r *http.Request, w http.ResponseWriter, _ func(error) error, imp
 			w.Write([]byte("<h3>Examples</h3>"))
 
 			w.Write([]byte("<div class=\"examples-list\">"))
-			for category, categoryExamples := range examples {
+			categories := slices.Sorted(func(yield func(string) bool) {
+				for k := range examples {
+					if !yield(k) {
+						return
+					}
+				}
+			})
+			for _, category := range categories {
+				categoryExamples := examples[category]
 				fmt.Fprintf(w, "<details class=\"example-category\">")
 				fmt.Fprintf(w, "<summary class=\"category-header\">%s</summary>", formatExampleCategory(category))
 				fmt.Fprintf(w, "<div class=\"category-examples\">")

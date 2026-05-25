@@ -467,7 +467,15 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 					w.Write([]byte("<h3>Examples</h3>"))
 
 					w.Write([]byte("<div class=\"examples-list\">"))
-					for category, categoryExamples := range examples {
+					categories := slices.Sorted(func(yield func(string) bool) {
+						for k := range examples {
+							if !yield(k) {
+								return
+							}
+						}
+					})
+					for _, category := range categories {
+						categoryExamples := examples[category]
 						isCurrentCategory := slices.Contains(categoryExamples, name)
 						if isCurrentCategory {
 							fmt.Fprintf(w, "<details class=\"example-category\" open>")
