@@ -16,6 +16,14 @@
         import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@latest/dist/mermaid.esm.min.mjs";
         mermaid.initialize();
     </script>
+    <script src="https://cdn.jsdelivr.net/npm/marked@latest/marked.min.js"></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", function () {
+            document.querySelectorAll(".markdown").forEach(function (el) {
+                el.innerHTML = marked.parse(el.textContent);
+            });
+        });
+    </script>
     <style>
         :root {
             --sidebar-bg: #f8fafc;

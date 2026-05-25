@@ -506,10 +506,10 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 				}
 				fmt.Fprintf(w, "<h1>%v</h1>", html.EscapeString(example.Title))
 				if example.Story != "" {
-					fmt.Fprintf(w, "<p>%v</p>", html.EscapeString(example.Story))
+					fmt.Fprintf(w, "<div class=\"markdown\">%v</div>", html.EscapeString(example.Story))
 				}
 				if example.Tests != "" {
-					fmt.Fprintf(w, "<p>Tests %s</p>", html.EscapeString(example.Tests))
+					fmt.Fprintf(w, "<div class=\"markdown\">Tests %s</div>", html.EscapeString(example.Tests))
 				}
 				var mermaid bytes.Buffer
 				fmt.Fprintf(&mermaid, "sequenceDiagram\n")
@@ -542,7 +542,7 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 				}
 				for _, step := range example.Steps {
 					if step.Note != "" {
-						fmt.Fprintf(w, "<p>%s</p>", step.Note)
+						fmt.Fprintf(w, "<div class=\"markdown\">%s</div>", html.EscapeString(step.Note))
 					}
 					if step.Depth > 1 || step.Setup {
 						continue
