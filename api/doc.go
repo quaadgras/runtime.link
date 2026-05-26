@@ -41,10 +41,12 @@ func (fn Documentation) Example(ctx context.Context, name string) (Example, bool
 	example := isolated.example()
 	// setup API capture
 	for i := range rtype.Elem().NumField() {
-		if !rtype.Elem().Field(i).IsExported() {
+		field := rtype.Elem().Field(i)
+		if !field.IsExported() {
 			continue
 		}
-		example.trace(StructureOf(rvalue.Elem().Field(i).Addr().Interface()))
+		prefix := field.Tag.Get("rest")
+		example.trace(StructureOf(rvalue.Elem().Field(i).Addr().Interface()), prefix)
 	}
 	example.Title = name
 	writer, ok := method.Interface().(func(context.Context) error)
@@ -108,9 +110,10 @@ type Step struct {
 	Args []reflect.Value
 	Vals []reflect.Value
 
-	Error error
-	Depth uint
-	Setup bool
+	Error  error
+	Depth  uint
+	Setup  bool
+	Prefix string
 }
 
 type TestingFramework struct {
@@ -153,7 +156,11 @@ func (tdd *TestingFramework) Guide(description literal) {
 	}
 }
 
-func (eg *Example) trace(spec Structure) {
+func (eg *Example) trace(spec Structure, prefix ...string) {
+	var pfx string
+	if len(prefix) > 0 {
+		pfx = prefix[0]
+	}
 	for i, old := range spec.Functions {
 		old := old.Copy()
 		fn := &spec.Functions[i]
@@ -177,11 +184,12 @@ func (eg *Example) trace(spec Structure) {
 			step.Error = err
 			step.Depth = eg.depth
 			step.Setup = eg.setup
+			step.Prefix = pfx
 			return
 		})
 	}
 	for _, section := range spec.Namespace {
-		eg.trace(section)
+		eg.trace(section, prefix...)
 	}
 }
 

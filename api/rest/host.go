@@ -554,6 +554,11 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 							fmt.Fprintf(w, "<pre>%s</pre>", err)
 							continue
 						}
+						if step.Prefix != "" {
+							if method, path, ok := strings.Cut(url, " "); ok {
+								url = method + " " + step.Prefix + path
+							}
+						}
 						apiRefURL := apiReferenceURL(*step.Call)
 						fmt.Fprintf(w, "<div class=sample><pre>%v <a href=\"%s\" target=\"_blank\" class=\"api-ref-link\">📖 View in API Reference</a></pre>", url, apiRefURL)
 						if len(req) > 0 {
