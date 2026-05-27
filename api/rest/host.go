@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"runtime.link/api"
 	"runtime.link/api/cors"
@@ -335,6 +336,26 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 	if err != nil {
 		return nil, xray.New(err)
 	}
+	var (
+		exampleCache   = make(map[string]api.Example)
+		exampleCacheMu sync.Mutex
+	)
+	cachedExample := func(documented api.WithExamples, ctx context.Context, name string) (api.Example, bool) {
+		exampleCacheMu.Lock()
+		if eg, ok := exampleCache[name]; ok {
+			exampleCacheMu.Unlock()
+			return eg, true
+		}
+		exampleCacheMu.Unlock()
+		eg, ok := documented.Example(ctx, name)
+		if !ok {
+			return eg, false
+		}
+		exampleCacheMu.Lock()
+		exampleCache[name] = eg
+		exampleCacheMu.Unlock()
+		return eg, true
+	}
 	return func(yield func(string, http.Handler) bool) {
 		var err error
 		if param_format != "{%s}" {
@@ -379,7 +400,8 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 			}
 			if strings.Contains(r.Header.Get("Accept"), "application/json") {
 				w.Header().Set("Content-Type", "application/json")
-				docs, err := oasDocumentOf(ctx, auth, r, spec.Structure)
+				structure := exercisedStructure(ctx, impl, spec.Structure, cachedExample)
+				docs, err := oasDocumentOf(ctx, auth, r, structure)
 				if err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
@@ -395,7 +417,8 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 			}
 			if strings.Contains(r.Header.Get("Accept"), "application/javascript") {
 				w.Header().Set("Content-Type", "application/javascript")
-				docs, err := oasDocumentOf(ctx, auth, r, spec.Structure)
+				structure := exercisedStructure(ctx, impl, spec.Structure, cachedExample)
+				docs, err := oasDocumentOf(ctx, auth, r, structure)
 				if err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
@@ -445,7 +468,7 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 			if !yield("GET /examples/{name}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				addCORS(auth, w, r, api.Function{})
 				name := r.PathValue("name")
-				example, ok := documented.Example(r.Context(), name)
+				example, ok := cachedExample(documented, r.Context(), name)
 				if !ok {
 					http.NotFound(w, r)
 					return
@@ -1022,4 +1045,59 @@ func attach(auth api.Auth[*http.Request], yield func(string, http.Handler) bool,
 			}
 		}
 	}
+}
+
+// exercisedStructure runs all examples (via cache) and returns a filtered
+// copy of the structure containing only functions exercised by at least one
+// example. If impl does not implement WithExamples, the original structure
+// is returned unmodified.
+func exercisedStructure(ctx context.Context, impl any, structure api.Structure, cachedExample func(api.WithExamples, context.Context, string) (api.Example, bool)) api.Structure {
+	documented, ok := impl.(api.WithExamples)
+	if !ok {
+		return structure
+	}
+	categories, err := documented.Examples(ctx)
+	if err != nil || len(categories) == 0 {
+		return structure
+	}
+	exercised := make(map[string]bool)
+	for _, names := range categories {
+		for _, name := range names {
+			eg, ok := cachedExample(documented, ctx, name)
+			if !ok {
+				continue
+			}
+			for _, step := range eg.Steps {
+				if step.Call != nil {
+					if tag := string(step.Call.Tags.Get("rest")); tag != "" {
+						exercised[tag] = true
+					}
+				}
+			}
+		}
+	}
+	if len(exercised) == 0 {
+		return structure
+	}
+	return filterStructure(structure, exercised)
+}
+
+func filterStructure(structure api.Structure, exercised map[string]bool) api.Structure {
+	filtered := structure
+	filtered.Functions = nil
+	for _, fn := range structure.Functions {
+		if tag := string(fn.Tags.Get("rest")); tag != "" && exercised[tag] {
+			filtered.Functions = append(filtered.Functions, fn)
+		}
+	}
+	if structure.Namespace != nil {
+		filtered.Namespace = make(map[string]api.Structure, len(structure.Namespace))
+		for name, ns := range structure.Namespace {
+			child := filterStructure(ns, exercised)
+			if len(child.Functions) > 0 || len(child.Namespace) > 0 {
+				filtered.Namespace[name] = child
+			}
+		}
+	}
+	return filtered
 }
