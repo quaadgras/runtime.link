@@ -62,6 +62,8 @@ func ValueOf[Storage any, Values any, Variant taggedWith[Storage, Values]](varia
 type TypeOf[T any] interface {
 	fmt.Stringer
 
+	ValuesJSON() (oneof []json.RawMessage)
+
 	Key() (string, error)
 
 	value() T
@@ -683,6 +685,29 @@ func (v caseMethods[Variant, Constraint]) With(val Constraint) Variant { return 
 // Key returns the key for this case, as if it were returned by MarshalPair.
 func (v caseMethods[Variant, Constraint]) Key() (string, error) {
 	return v.accessor.key()
+}
+
+func (v caseMethods[Variant, Constraint]) ValuesJSON() (oneof []json.RawMessage) {
+	var zero Variant
+	rtype := reflect.TypeOf(zero)
+	if rtype.Kind() != reflect.Struct || rtype.NumField() == 0 {
+		return nil
+	}
+	mutex.RLock()
+	accessors := cache[rtype.Field(0).Type]
+	mutex.RUnlock()
+	for _, access := range accessors {
+		key, err := access.key()
+		if err != nil {
+			continue
+		}
+		b, err := json.Marshal(key)
+		if err != nil {
+			continue
+		}
+		oneof = append(oneof, b)
+	}
+	return oneof
 }
 
 func (v caseMethods[Variant, Constraint]) String() string {
