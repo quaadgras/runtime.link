@@ -725,6 +725,83 @@ type CaseReflection struct {
 	Test func(any) bool
 }
 
+func (v taggedMethods[Storage, Values]) TypesJSON() []reflect.Type {
+	var zero Values
+	var rtype = reflect.TypeOf(zero)
+	accessors := v.accessors()
+	var types []reflect.Type
+	for i := 0; i < rtype.NumField(); i++ {
+		field := rtype.Field(i)
+		access := accessors[i]
+		if access.text != "" || access.zero {
+			types = append(types, reflect.TypeOf(""))
+			continue
+		}
+		base, kind, _ := strings.Cut(access.json, ",")
+		name, rule, _ := strings.Cut(base, "?")
+		key, val, hasConst := strings.Cut(rule, "=")
+		valueType := v.typeOf(field)
+		if name != "" && !hasConst {
+			// Wrapped as {"name": value} with optional discriminator.
+			if valueType == nil {
+				valueType = reflect.TypeOf(struct{}{})
+			}
+			fields := []reflect.StructField{
+				{
+					Name: "Value",
+					Type: valueType,
+					Tag:  reflect.StructTag(`json:"` + name + `"`),
+				},
+			}
+			if key != "" {
+				fields = append(fields, reflect.StructField{
+					Name: "Type",
+					Type: reflect.TypeOf(""),
+					Tag:  reflect.StructTag(`json:"` + key + `"`),
+				})
+			}
+			types = append(types, reflect.StructOf(fields))
+			continue
+		}
+		if hasConst {
+			// Discriminated union: value fields merged with {key: val}.
+			if valueType == nil {
+				valueType = reflect.TypeOf(struct{}{})
+			}
+			types = append(types, reflect.StructOf([]reflect.StructField{
+				{
+					Name:      "UnionValue",
+					Anonymous: true,
+					Type:      valueType,
+				},
+				{
+					Name: "UnionType",
+					Type: reflect.TypeOf(val),
+					Tag:  reflect.StructTag(`json:"` + key + `"`),
+				},
+			}))
+			continue
+		}
+		// Bare value — use the kind hint or the value type directly.
+		if valueType == nil {
+			valueType = reflect.TypeOf(struct{}{})
+		}
+		switch kind {
+		case "string":
+			types = append(types, reflect.TypeOf(""))
+		case "number":
+			types = append(types, reflect.TypeOf(float64(0)))
+		case "object":
+			types = append(types, valueType)
+		case "array":
+			types = append(types, reflect.SliceOf(valueType))
+		default:
+			types = append(types, valueType)
+		}
+	}
+	return types
+}
+
 func (v taggedMethods[Storage, Values]) Reflection() []CaseReflection {
 	var zero Values
 	var rtype = reflect.TypeOf(zero)
