@@ -527,7 +527,7 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 				} else {
 					header = "❌ " + header
 				}
-				fmt.Fprintf(w, "<h1>%v</h1>", html.EscapeString(example.Title))
+				fmt.Fprintf(w, "<h1>%v</h1>", html.EscapeString(formatExampleCategory(example.Title)))
 				if example.Story != "" {
 					fmt.Fprintf(w, "<div class=\"markdown\">%v</div>", html.EscapeString(example.Story))
 				}

@@ -27,22 +27,20 @@ import (
 
 func formatExampleCategory(name string) string {
 	name = strings.TrimPrefix(name, "examples_")
+	runes := []rune(name)
 	var result strings.Builder
-	capitalizeNext := true
-	for _, r := range name {
+	for i, r := range runes {
 		if r == '_' {
 			result.WriteRune(' ')
-			capitalizeNext = true
 			continue
 		}
-		if capitalizeNext && r >= 'a' && r <= 'z' {
-			r = r - 'a' + 'A'
-			capitalizeNext = false
-		} else if r >= 'A' && r <= 'Z' && result.Len() > 0 {
-			result.WriteRune(' ')
-			capitalizeNext = false
-		} else {
-			capitalizeNext = false
+		if r >= 'A' && r <= 'Z' && i > 0 && runes[i-1] != '_' {
+			prev := runes[i-1]
+			if prev >= 'a' && prev <= 'z' {
+				result.WriteRune(' ')
+			} else if prev >= 'A' && prev <= 'Z' && i+1 < len(runes) && runes[i+1] >= 'a' && runes[i+1] <= 'z' {
+				result.WriteRune(' ')
+			}
 		}
 		result.WriteRune(r)
 	}
