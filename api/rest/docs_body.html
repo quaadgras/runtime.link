@@ -27,11 +27,15 @@
             "application/json",
             window.location.pathname,
         );
-        spec.servers = [
-            {
-                url: window.location.origin + window.location.pathname,
-            },
-        ];
+        if (!spec.servers || spec.servers.length === 0) {
+            let base = window.location.pathname.replace(/\/documentation$/, "") || "/";
+            spec.servers = [{ url: window.location.origin + base }];
+        } else {
+            spec.servers = spec.servers.map(s => ({
+                ...s,
+                url: window.location.origin + s.url,
+            }));
+        }
         console.log(spec);
         window.ui = SwaggerUIBundle({
             spec: spec,

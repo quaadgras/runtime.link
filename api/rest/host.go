@@ -410,6 +410,9 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 					rtype := reflect.TypeOf(impl)
 					docs.Information.Title = oas.Readable(path.Base(rtype.PkgPath()) + " " + rtype.Name())
 				}
+				if basePath := r.Header.Get("X-Base-Path"); basePath != "" {
+					docs.Servers = []oas.Server{{URL: oas.URL(basePath)}}
+				}
 				enc := json.NewEncoder(w)
 				enc.SetIndent("", "  ")
 				enc.Encode(docs)
