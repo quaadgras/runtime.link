@@ -793,18 +793,28 @@ func (v taggedMethods[Storage, Values]) TypesJSON() []reflect.Type {
 			if valueType == nil {
 				valueType = reflect.TypeOf(struct{}{})
 			}
-			types = append(types, reflect.StructOf([]reflect.StructField{
-				{
-					Name:      "UnionValue",
-					Anonymous: true,
-					Type:      valueType,
-				},
-				{
-					Name: "UnionType",
-					Type: reflect.TypeOf(val),
-					Tag:  reflect.StructTag(`json:"` + key + `"`),
-				},
-			}))
+			var fields []reflect.StructField
+			if valueType.Kind() == reflect.Struct {
+				for fi := range valueType.NumField() {
+					f := valueType.Field(fi)
+					if f.PkgPath != "" {
+						continue
+					}
+					fields = append(fields, f)
+				}
+			} else {
+				fields = append(fields, reflect.StructField{
+					Name: "UnionValue",
+					Type: valueType,
+					Tag:  reflect.StructTag(`json:"value"`),
+				})
+			}
+			fields = append(fields, reflect.StructField{
+				Name: "UnionType",
+				Type: reflect.TypeOf(val),
+				Tag:  reflect.StructTag(`json:"` + key + `"`),
+			})
+			types = append(types, reflect.StructOf(fields))
 			continue
 		}
 		// Bare value — use the kind hint or the value type directly.
