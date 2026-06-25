@@ -1,5 +1,5 @@
 <script
-    src="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui-bundle.js"
+    src="https://unpkg.com/swagger-ui-dist@5.32.8/swagger-ui-bundle.js"
     crossorigin
 ></script>
 <script>
@@ -28,10 +28,11 @@
             window.location.pathname,
         );
         if (!spec.servers || spec.servers.length === 0) {
-            let base = window.location.pathname.replace(/\/documentation$/, "") || "/";
+            let base =
+                window.location.pathname.replace(/\/documentation$/, "") || "/";
             spec.servers = [{ url: window.location.origin + base }];
         } else {
-            spec.servers = spec.servers.map(s => ({
+            spec.servers = spec.servers.map((s) => ({
                 ...s,
                 url: window.location.origin + s.url,
             }));

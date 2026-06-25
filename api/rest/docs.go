@@ -220,6 +220,8 @@ func addFunctionTo(spec *oas.Document, fn api.Function, namespace string) error 
 		item.Patch = &operation
 	case "TRACE":
 		item.Trace = &operation
+	case "QUERY":
+		item.Query = &operation
 	default:
 		return fmt.Errorf("invalid rest method: %q", method)
 	}

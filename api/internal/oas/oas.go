@@ -104,6 +104,7 @@ type PathItem struct {
 	Head       *Operation   `json:"head,omitempty"`
 	Patch      *Operation   `json:"patch,omitempty"`
 	Trace      *Operation   `json:"trace,omitempty"`
+	Query      *Operation   `json:"query,omitempty"`
 	Servers    []Server     `json:"servers,omitempty"`
 	Parameters []*Parameter `json:"parameters,omitempty"`
 }
