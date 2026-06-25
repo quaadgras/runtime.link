@@ -590,7 +590,11 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 							}
 						}
 						apiRefURL := apiReferenceURL(*step.Call)
-						fmt.Fprintf(w, "<div class=sample><pre>%v <a href=\"%s\" target=\"_blank\" class=\"api-ref-link\">📖 View in API Reference</a></pre>", url, apiRefURL)
+						var queryHint string
+						if method, _, ok := strings.Cut(url, " "); ok && method == "QUERY" {
+							queryHint = ` <span class="query-hint" title="If your infrastructure does not support the HTTP QUERY method, you can send a POST request with the header X-HTTP-Method-Override: QUERY instead.">&#x3f;</span>`
+						}
+						fmt.Fprintf(w, "<div class=sample><pre>%v%s <a href=\"%s\" target=\"_blank\" class=\"api-ref-link\">📖 View in API Reference</a></pre>", url, queryHint, apiRefURL)
 						if len(req) > 0 {
 							fmt.Fprintf(w, "<b>Request:</b>")
 							fmt.Fprintf(w, "<pre>%s</pre>", req)
