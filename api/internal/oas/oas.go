@@ -1,4 +1,4 @@
-// Package oas provides a representation of the OpenAPI Specification (OAS) Version 3.1.0
+// Package oas provides a representation of the OpenAPI Specification (OAS) Version 3.2.0
 package oas
 
 import (

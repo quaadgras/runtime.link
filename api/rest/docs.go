@@ -129,7 +129,7 @@ func sample(fn api.Function, args, rets []reflect.Value) (url string, req, resp 
 // oasDocumentOf returns a [oas.Document] for a [Structure].
 func oasDocumentOf(ctx context.Context, auth api.Auth[*http.Request], req *http.Request, structure api.Structure) (oas.Document, error) {
 	var spec oas.Document
-	spec.OpenAPI = "3.1.0"
+	spec.OpenAPI = "3.2.0"
 	if structure.Name != "" {
 		spec.Information.Title = oas.Readable(structure.Name) + " API"
 	}
