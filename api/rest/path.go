@@ -59,6 +59,11 @@ func (m *mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	this, _, ok := strings.Cut(path, "/")
 	if this == "" {
 		this = r.Method
+		if this == "POST" {
+			if override := r.Header.Get("X-HTTP-Method-Override"); override == "QUERY" {
+				this = override
+			}
+		}
 	}
 	if ok {
 		path = path[strings.Index(path, "/"):]

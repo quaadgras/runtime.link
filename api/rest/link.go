@@ -332,9 +332,16 @@ func link(client *http.Client, spec specification, host string) error {
 				default:
 					body = io.NopCloser(writer)
 				}
-				req, err := http.NewRequestWithContext(ctx, method, host+endpoint, xray.NewReader(ctx, body))
+				httpMethod := method
+				if method == "QUERY" {
+					httpMethod = "POST"
+				}
+				req, err := http.NewRequestWithContext(ctx, httpMethod, host+endpoint, xray.NewReader(ctx, body))
 				if err != nil {
 					return nil, err
+				}
+				if method != httpMethod {
+					req.Header.Set("X-HTTP-Method-Override", method)
 				}
 				maps.Copy(req.Header, headers)
 				xray.ContextAdd(ctx, req)
