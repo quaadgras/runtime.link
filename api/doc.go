@@ -46,7 +46,9 @@ func (fn Documentation) Example(ctx context.Context, name string) (Example, bool
 			continue
 		}
 		prefix := field.Tag.Get("rest")
-		example.trace(StructureOf(rvalue.Elem().Field(i).Addr().Interface()), prefix)
+		spec := StructureOf(rvalue.Elem().Field(i).Addr().Interface())
+		spec.link([]string{field.Name})
+		example.trace(spec, prefix)
 	}
 	example.Title = name
 	writer, ok := method.Interface().(func(context.Context) error)
