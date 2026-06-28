@@ -34,7 +34,7 @@ func apiReferenceURL(fn api.Function) string {
 	if len(fn.Path) == 0 {
 		categoryName = "default"
 	} else {
-		categoryName = fn.Path[len(fn.Path)-1]
+		categoryName = fn.Path[0]
 	}
 
 	return fmt.Sprintf("../#/%s/%s", categoryName, fn.Name)
