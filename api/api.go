@@ -547,6 +547,12 @@ func (scanner *ArgumentScanner) Scan(format string) (reflect.Value, error) {
 						return arg.Field(j), nil
 					}
 				}
+				for j := 0; j < rtype.NumField(); j++ {
+					tag := rtype.Field(j).Tag.Get("json")
+					if name, _, _ := strings.Cut(tag, ","); name == format {
+						return arg.Field(j), nil
+					}
+				}
 			}
 		}
 		return reflect.Value{}, xray.New(errors.New("ffi.ArgumentScanner: no argument named " + format))
