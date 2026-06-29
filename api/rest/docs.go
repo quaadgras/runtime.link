@@ -510,6 +510,9 @@ func schemaFor(reg oas.Registry, val any) *oas.Schema {
 		schema.Title = oas.Readable(rtype.Name())
 		useRef = true
 	}
+	if doc, ok := nitfc.(interface{ Docs() string }); ok {
+		schema.Description = oas.Readable(doc.Docs())
+	}
 	if reg == nil {
 		reg = schema
 		useRef = false
