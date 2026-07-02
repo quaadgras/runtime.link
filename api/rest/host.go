@@ -621,6 +621,11 @@ func Handlers(auth api.Auth[*http.Request], impl any, param_format, remainder_fo
 				return
 			}
 		}
+		if tested, ok := impl.(api.WithTests); ok && tested.History(context.Background()) != nil {
+			if !yieldTestRuns(auth, yield, tested) {
+				return
+			}
+		}
 		attach(auth, yield, spec)
 	}, nil
 }

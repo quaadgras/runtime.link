@@ -2,13 +2,19 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"testing"
+	"time"
+
+	"runtime.link/api/test"
+	"runtime.link/api/xray"
 )
 
 type literal string
@@ -16,6 +22,10 @@ type literal string
 type Documentation func(context.Context) (Examples, error)
 
 func (fn Documentation) Example(ctx context.Context, name string) (Example, bool) {
+	return fn.run(ctx, name, false)
+}
+
+func (fn Documentation) run(ctx context.Context, name string, test bool) (Example, bool) {
 	if fn == nil {
 		return Example{}, false
 	}
@@ -55,6 +65,14 @@ func (fn Documentation) Example(ctx context.Context, name string) (Example, bool
 	if !ok {
 		return Example{}, false
 	}
+	// Examples run against a fresh background context so documentation
+	// rendering never inherits request-scoped state. Test runs, however,
+	// must run against the caller's context so the xray recorder installed
+	// by Test() captures internal API calls made by the implementation.
+	runCtx := context.Background()
+	if test {
+		runCtx = ctx
+	}
 	func() {
 		defer func() {
 			if err := recover(); err != nil {
@@ -62,14 +80,17 @@ func (fn Documentation) Example(ctx context.Context, name string) (Example, bool
 				example.Panic = true
 			}
 		}()
-		if err := writer(context.Background()); err != nil {
+		if err := writer(runCtx); err != nil {
 			example.Error = err
 		}
 	}()
 	return *example, true
 }
 
-func (fn Documentation) Examples(ctx context.Context) (map[string][]string, error) {
+// methods enumerates the func(context.Context) error methods of the
+// documentation template, grouped by the file they are declared in, keeping
+// only those methods for which keep returns true.
+func (fn Documentation) methods(ctx context.Context, keep func(name string) bool) (map[string][]string, error) {
 	if fn == nil {
 		return nil, nil
 	}
@@ -86,12 +107,139 @@ func (fn Documentation) Examples(ctx context.Context) (map[string][]string, erro
 		if _, ok := value.Method(i).Interface().(func(context.Context) error); !ok {
 			continue
 		}
+		if keep != nil && !keep(method.Name) {
+			continue
+		}
 
 		filename := extractFilenameFromMethod(method)
 		categories[filename] = append(categories[filename], method.Name)
 	}
 
 	return categories, nil
+}
+
+// isTest reports whether a method name denotes a test rather than an example.
+// Tests are distinguished by a "Test" prefix; everything else is an example.
+func isTest(name string) bool {
+	return strings.HasPrefix(name, "Test")
+}
+
+// Examples enumerates the example methods, grouped by the file they are
+// declared in. Test methods (those prefixed with "Test") are excluded; use
+// [Documentation.Tests] to enumerate those.
+func (fn Documentation) Examples(ctx context.Context) (map[string][]string, error) {
+	return fn.methods(ctx, func(name string) bool { return !isTest(name) })
+}
+
+// Tests enumerates the runnable methods, grouped by the file they are
+// declared in. Every method is runnable: both examples (rendered as
+// documentation) and dedicated test methods (prefixed with "Test"). The
+// difference from [Documentation.Examples] is that Tests additionally
+// includes the Test-prefixed methods, so the /testruns pages exercise the
+// full suite.
+func (fn Documentation) Tests(ctx context.Context) (map[string][]string, error) {
+	return fn.methods(ctx, nil)
+}
+
+// Test runs the named test method and returns a [test.Execution] describing
+// what happened: the story, the wall-clock duration, the ordered trace of
+// calls (with their arguments and return values) and any error or panic.
+// The boolean is false if no method with the given name exists.
+func (fn Documentation) Test(ctx context.Context, name string) (test.Execution, bool) {
+	start := time.Now()
+	ctx = xray.NewContext(ctx)
+	example, ok := fn.run(ctx, name, true)
+	if !ok {
+		return test.Execution{}, false
+	}
+	exec := test.Execution{
+		Title: example.Title,
+		Story: example.Story,
+		Speed: time.Since(start),
+		Panic: example.Panic,
+	}
+	if example.Error != nil {
+		exec.Error = example.Error.Error()
+	}
+	// Collect top-level steps and internal (xray-recorded) calls into a
+	// single flat list, each tagged with the monotonic sequence stamped at
+	// its call-start, then order by that sequence so internal calls appear
+	// inline between the top-level calls that made them.
+	type ordered struct {
+		seq   uint64
+		event test.Event
+	}
+	var events []ordered
+	for _, step := range example.Steps {
+		event := test.Event{Note: step.Note}
+		if step.Call != nil {
+			event.Call = step.Call.Name
+			event.Args = encodeValues(step.Args)
+			event.Vals = encodeValues(step.Vals)
+		}
+		events = append(events, ordered{seq: step.Seq, event: event})
+	}
+	for xray.ContextHas[xray.Call](ctx) {
+		call := xray.ContextGet[xray.Call](ctx)
+		events = append(events, ordered{seq: call.Seq, event: test.Event{
+			Call: call.Name,
+			Args: encodeValues(call.Args),
+			Vals: encodeValues(call.Vals),
+		}})
+	}
+	sort.SliceStable(events, func(i, j int) bool {
+		return events[i].seq < events[j].seq
+	})
+	for _, e := range events {
+		exec.Trace = append(exec.Trace, e.event)
+	}
+	return exec, true
+}
+
+// History returns the [test.History] assigned to the underlying test
+// implementation, or nil if the implementation does not embed a
+// [TestingFramework] with an assigned History. The rest host uses this to
+// decide whether the builtin /testrun/* endpoints should be served.
+func (fn Documentation) History(ctx context.Context) test.History {
+	if fn == nil {
+		return nil
+	}
+	isolated, err := fn(ctx)
+	if err != nil {
+		return nil
+	}
+	with, ok := isolated.(WithHistory)
+	if !ok {
+		return nil
+	}
+	return with.history()
+}
+
+// encodeValues renders a slice of reflected call arguments (or return values)
+// as a JSON array, falling back to a string rendering for values that cannot
+// be marshalled directly (channels, funcs, etc). A nil result is returned for
+// an empty slice so the field is omitted from the record.
+func encodeValues(values []reflect.Value) json.RawMessage {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]json.RawMessage, 0, len(values))
+	for _, v := range values {
+		if !v.IsValid() {
+			out = append(out, json.RawMessage("null"))
+			continue
+		}
+		data, err := json.Marshal(v.Interface())
+		if err != nil {
+			data, _ = json.Marshal(fmt.Sprintf("%v", v.Interface()))
+		}
+		out = append(out, data)
+	}
+	data, err := json.Marshal(out)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 type Example struct {
@@ -111,6 +259,8 @@ type Step struct {
 	Call *Function
 	Args []reflect.Value
 	Vals []reflect.Value
+	Time time.Time
+	Seq  uint64
 
 	Error  error
 	Depth  uint
@@ -120,6 +270,8 @@ type Step struct {
 
 type TestingFramework struct {
 	eg Example
+
+	History test.History
 }
 
 var _ WithExamples = (*Documentation)(nil)
@@ -129,11 +281,25 @@ type WithExamples interface {
 	Examples(context.Context) (map[string][]string, error)
 }
 
+type WithTests interface {
+	Test(context.Context, string) (test.Execution, bool)
+	Tests(context.Context) (map[string][]string, error)
+	History(context.Context) test.History
+}
+
 type Examples interface {
 	example() *Example
 }
 
+// WithHistory is implemented by test [Examples] implementations that carry an
+// assigned [test.History]. The rest host uses it to discover whether the
+// builtin /testrun/* endpoints should be served for a given implementation.
+type WithHistory interface {
+	history() test.History
+}
+
 func (tdd *TestingFramework) example() *Example         { return &tdd.eg }
+func (tdd *TestingFramework) history() test.History     { return tdd.History }
 func (tdd *TestingFramework) Story(description literal) { tdd.eg.Story = string(description) }
 func (tdd *TestingFramework) Tests(description literal) { tdd.eg.Tests = string(description) }
 func (tdd *TestingFramework) Setup(ctx context.Context, fn func(ctx context.Context) error) error {
@@ -148,14 +314,22 @@ func (tdd *TestingFramework) Setup(ctx context.Context, fn func(ctx context.Cont
 }
 
 func (tdd *TestingFramework) Guide(description literal) {
-	if len(tdd.eg.Steps) == 0 {
-		tdd.eg.Steps = make([]Step, 1)
+	now := time.Now()
+	seq := xray.Sequence()
+	// A note is meant to precede and merge with the following API call, so
+	// reuse a trailing placeholder that has neither a note nor a recorded
+	// call yet. Crucially, do NOT reuse a step that already holds a call
+	// (e.g. one recorded during Setup), as that would clobber its ordering.
+	if n := len(tdd.eg.Steps); n > 0 {
+		last := &tdd.eg.Steps[n-1]
+		if last.Note == "" && last.Call == nil {
+			last.Note = string(description)
+			last.Time = now
+			last.Seq = seq
+			return
+		}
 	}
-	if tdd.eg.Steps[0].Note == "" {
-		tdd.eg.Steps[0].Note = string(description)
-	} else {
-		tdd.eg.Steps = append(tdd.eg.Steps, Step{Note: string(description)})
-	}
+	tdd.eg.Steps = append(tdd.eg.Steps, Step{Note: string(description), Time: now, Seq: seq})
 }
 
 func (eg *Example) trace(spec Structure, prefix ...string) {
@@ -171,6 +345,11 @@ func (eg *Example) trace(spec Structure, prefix ...string) {
 			defer func() {
 				eg.depth--
 			}()
+			// Stamp a monotonic sequence before invoking so a flat trace
+			// orders this top-level call ahead of any internal calls it
+			// makes (which xray stamps at their own start).
+			seq := xray.Sequence()
+			start := time.Now()
 			results, err = old.Call(ctx, args)
 			if len(eg.Steps) == 0 {
 				eg.Steps = append(eg.Steps, Step{})
@@ -180,6 +359,8 @@ func (eg *Example) trace(spec Structure, prefix ...string) {
 				eg.Steps = append(eg.Steps, Step{})
 				step = &eg.Steps[len(eg.Steps)-1]
 			}
+			step.Time = start
+			step.Seq = seq
 			step.Call = fn
 			step.Args = args
 			step.Vals = results
