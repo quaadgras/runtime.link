@@ -37,6 +37,10 @@ func yieldTestRuns(auth api.Auth[*http.Request], yield func(string, http.Handler
 			return
 		}
 		tests, _ := tested.Tests(r.Context())
+		// Backfill the source file for each summary from the enumerated
+		// tests (grouped by file), so the overview can group by file even
+		// when the History implementation does not persist it.
+		fillSummaryFrom(summaries, tests)
 		writeTestRunHead(w)
 		writeTestRunNav(w, tests, "", "")
 		w.Write([]byte("<main>"))
@@ -188,6 +192,26 @@ func writeTestRunNav(w http.ResponseWriter, tests map[string][]string, current, 
 	w.Write([]byte("</div></nav>"))
 }
 
+// fillSummaryFrom populates the From (source file) of each summary that does
+// not already carry one, looking the test name up in the file-grouped tests
+// map. History implementations that persist From take precedence.
+func fillSummaryFrom(summaries []test.Summary, tests map[string][]string) {
+	if len(tests) == 0 {
+		return
+	}
+	fileOf := make(map[string]string)
+	for file, names := range tests {
+		for _, name := range names {
+			fileOf[name] = file
+		}
+	}
+	for i := range summaries {
+		if summaries[i].From == "" {
+			summaries[i].From = fileOf[summaries[i].Name]
+		}
+	}
+}
+
 // writeTestRunOverview renders the pass/fail grid for all tests.
 func writeTestRunOverview(w http.ResponseWriter, summaries []test.Summary) {
 	if len(summaries) == 0 {
@@ -204,21 +228,43 @@ func writeTestRunOverview(w http.ResponseWriter, summaries []test.Summary) {
 		}
 	}
 	fmt.Fprintf(w, "<div class=\"markdown\">%d passing, %d failing, %d total.</div>", passed, failed, len(summaries))
-	fmt.Fprintf(w, "<div class=\"examples-list\">")
+
+	// Group the tests by the file they were declared in (Summary.From) so the
+	// overview mirrors the source layout. Files are listed alphabetically and
+	// tests keep their given order within each file.
+	byFile := make(map[string][]test.Summary)
 	for _, s := range summaries {
-		var glyph string
-		switch {
-		case s.Fail:
-			glyph = "❌"
-		case s.Pass:
-			glyph = "✅"
-		default:
-			glyph = "⚪"
+		from := s.From
+		if from == "" {
+			from = "uncategorized"
 		}
-		fmt.Fprintf(w, "<div class=sample><pre>%s <a href=\"testruns/%s\">%s</a></pre></div>",
-			glyph, html.EscapeString(s.Name), html.EscapeString(formatExampleCategory(s.Name)))
+		byFile[from] = append(byFile[from], s)
 	}
-	fmt.Fprintf(w, "</div>")
+	files := slices.Sorted(func(yield func(string) bool) {
+		for k := range byFile {
+			if !yield(k) {
+				return
+			}
+		}
+	})
+	for _, file := range files {
+		fmt.Fprintf(w, "<h2>%s</h2>", html.EscapeString(formatExampleCategory(file)))
+		fmt.Fprintf(w, "<div class=\"examples-list\">")
+		for _, s := range byFile[file] {
+			var glyph string
+			switch {
+			case s.Fail:
+				glyph = "❌"
+			case s.Pass:
+				glyph = "✅"
+			default:
+				glyph = "⚪"
+			}
+			fmt.Fprintf(w, "<div class=sample><pre>%s <a href=\"testruns/%s\">%s</a></pre></div>",
+				glyph, html.EscapeString(s.Name), html.EscapeString(formatExampleCategory(s.Name)))
+		}
+		fmt.Fprintf(w, "</div>")
+	}
 }
 
 // writeTestRunButton renders the form whose submission runs the test. It
@@ -240,6 +286,9 @@ func writeTestRunTrace(w http.ResponseWriter, trace []test.Event) {
 			continue
 		}
 		fmt.Fprintf(w, "<div class=sample><pre>%s</pre>", html.EscapeString(event.Call))
+		if event.Docs != "" {
+			fmt.Fprintf(w, "<div class=\"markdown call-docs\">%s</div>", html.EscapeString(event.Docs))
+		}
 		if len(event.Args) > 0 {
 			fmt.Fprintf(w, "<b>Args:</b><pre>%s</pre>", html.EscapeString(string(event.Args)))
 		}

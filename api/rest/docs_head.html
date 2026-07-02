@@ -191,11 +191,38 @@
             line-height: 1.5;
         }
 
+        /* Links inside the dark code panels need a light colour; the default
+           blue link on the dark slate background is unreadable. */
+        .sample > pre a {
+            color: #93c5fd;
+            text-decoration: underline;
+        }
+
+        .sample > pre a:hover {
+            color: #bfdbfe;
+        }
+
         .sample b {
             color: var(--sidebar-active);
             font-weight: 600;
             display: block;
             margin: 1rem 0 0.5rem 0;
+        }
+
+        /* Documentation shown beneath a traced call (rest route + doc string). */
+        .call-docs {
+            margin: 0.25rem 0 0.75rem 0;
+            color: var(--sidebar-text);
+            font-size: 0.875rem;
+        }
+
+        .call-docs code {
+            background: var(--sidebar-bg);
+            border: 1px solid var(--sidebar-border);
+            border-radius: 4px;
+            padding: 0.1rem 0.35rem;
+            font-size: 0.85em;
+            color: var(--text-primary);
         }
 
         details {

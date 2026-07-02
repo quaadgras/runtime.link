@@ -174,6 +174,7 @@ func (fn Documentation) Test(ctx context.Context, name string) (test.Execution, 
 		event := test.Event{Note: step.Note}
 		if step.Call != nil {
 			event.Call = step.Call.Name
+			event.Docs = eventDocs(restRoute(step.Call.Tags), step.Call.Docs)
 			event.Args = encodeValues(step.Args)
 			event.Vals = encodeValues(step.Vals)
 		}
@@ -183,6 +184,7 @@ func (fn Documentation) Test(ctx context.Context, name string) (test.Execution, 
 		call := xray.ContextGet[xray.Call](ctx)
 		events = append(events, ordered{seq: call.Seq, event: test.Event{
 			Call: call.Name,
+			Docs: eventDocs(restRoute(call.Tags), DocumentationOf(reflect.StructField{Tag: call.Tags})),
 			Args: encodeValues(call.Args),
 			Vals: encodeValues(call.Vals),
 		}})
@@ -213,6 +215,72 @@ func (fn Documentation) History(ctx context.Context) test.History {
 		return nil
 	}
 	return with.history()
+}
+
+// restRoute extracts the "METHOD /path" portion of a rest struct tag, dropping
+// the trailing pattern/result rules (query params, body captures, result field
+// names) so the trace can display the endpoint that was hit. It returns an
+// empty string if there is no rest tag.
+func restRoute(tags reflect.StructTag) string {
+	rest := tags.Get("rest")
+	if rest == "" {
+		return ""
+	}
+	fields := strings.Fields(rest)
+	switch len(fields) {
+	case 0:
+		return ""
+	case 1:
+		return fields[0]
+	default:
+		// fields[0] is the HTTP method, fields[1] is the path (which may
+		// carry a ?query suffix); anything after is result/body rules.
+		path := fields[1]
+		if i := strings.IndexByte(path, '?'); i >= 0 {
+			path = path[:i]
+		}
+		return fields[0] + " " + cleanPathCaptures(path)
+	}
+}
+
+// cleanPathCaptures rewrites runtime.link path capture syntax "{name=%v}" into
+// the plain "{name}" form for display, so a route reads as a conventional URL
+// template rather than exposing the internal format verb.
+func cleanPathCaptures(path string) string {
+	for {
+		open := strings.IndexByte(path, '{')
+		if open < 0 {
+			return path
+		}
+		close := strings.IndexByte(path[open:], '}')
+		if close < 0 {
+			return path
+		}
+		close += open
+		segment := path[open+1 : close]
+		if eq := strings.IndexByte(segment, '='); eq >= 0 {
+			path = path[:open+1] + segment[:eq] + path[close:]
+			continue
+		}
+		// No capture to rewrite in this segment; advance past it to avoid
+		// looping forever on a plain "{name}".
+		rest := cleanPathCaptures(path[close+1:])
+		return path[:close+1] + rest
+	}
+}
+
+// eventDocs combines the rest route and documentation string of a traced call
+// into a single markdown blob for display beneath the call name. Either part
+// may be empty.
+func eventDocs(route, docs string) string {
+	switch {
+	case route != "" && docs != "":
+		return "`" + route + "`\n\n" + docs
+	case route != "":
+		return "`" + route + "`"
+	default:
+		return docs
+	}
 }
 
 // encodeValues renders a slice of reflected call arguments (or return values)

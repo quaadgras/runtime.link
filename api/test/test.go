@@ -34,6 +34,7 @@ type Execution struct {
 // Event record.
 type Event struct {
 	Note string          `json:"note,omitzero"`
+	Docs string          `json:"docs,omitzero"`
 	Call string          `json:"call,omitzero"`
 	Time time.Time       `json:"time,omitzero"`
 	Args json.RawMessage `json:"args,omitzero"`
@@ -42,6 +43,7 @@ type Event struct {
 
 type Summary struct {
 	Name string `json:"name"`
+	From string `json:"from"`
 	Pass bool   `json:"pass"`
 	Fail bool   `json:"fail"`
 	Todo bool   `json:"todo"`
