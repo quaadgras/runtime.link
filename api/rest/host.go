@@ -29,6 +29,47 @@ import (
 	"runtime.link/api/xray"
 )
 
+// scanTypeOf resolves a textual parameter value into a concrete xyz.TypeOf[T]
+// value for a tagged-union type selector (e.g. a filter field declared as
+// xyz.TypeOf[Account]). Such a field is an interface, so it can't be scanned
+// into directly; instead we recover the underlying union type from the
+// interface's unexported value() T method, enumerate its cases via Values(),
+// and match name against each case's Key()/String(). ok reports whether ref
+// was a TypeOf interface that could be resolved.
+func scanTypeOf(ref reflect.Value, name string) (ok bool, err error) {
+	if ref.Kind() != reflect.Ptr || ref.Elem().Kind() != reflect.Interface {
+		return false, nil
+	}
+	interfaceType := ref.Elem().Type()
+	value, has := interfaceType.MethodByName("value")
+	if !has || value.Type.NumOut() != 1 {
+		return false, nil
+	}
+	variantType := value.Type.Out(0)
+	values := reflect.New(variantType).Elem().MethodByName("Values")
+	if !values.IsValid() || values.Type().NumIn() != 1 || values.Type().NumOut() != 1 {
+		return false, nil
+	}
+	// Values(internal{}) returns a struct whose fields are the Case accessors,
+	// each of which already implements the TypeOf[T] interface.
+	cases := values.Call([]reflect.Value{reflect.New(values.Type().In(0)).Elem()})[0]
+	for i := 0; i < cases.NumField(); i++ {
+		field := cases.Field(i)
+		typed, isCase := field.Interface().(interface {
+			Key() (string, error)
+			String() string
+		})
+		if !isCase {
+			continue
+		}
+		if key, kerr := typed.Key(); kerr == nil && key == name || typed.String() == name {
+			ref.Elem().Set(field)
+			return true, nil
+		}
+	}
+	return true, fmt.Errorf("no case named %q in %v", name, variantType)
+}
+
 func apiReferenceURL(fn api.Function) string {
 	var categoryName string
 	if len(fn.Path) == 0 {
@@ -908,6 +949,11 @@ func attach(auth api.Auth[*http.Request], yield func(string, http.Handler) bool,
 										}
 									}
 									if err := decoder.UnmarshalJSON([]byte(strconv.Quote(val))); err != nil {
+										handle(ctx, fn, auth, w, fmt.Errorf("please provide a valid %v (%w)", ref.Type().String(), err))
+										return
+									}
+								} else if ok, err := scanTypeOf(ref, val); ok {
+									if err != nil {
 										handle(ctx, fn, auth, w, fmt.Errorf("please provide a valid %v (%w)", ref.Type().String(), err))
 										return
 									}
