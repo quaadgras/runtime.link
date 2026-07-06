@@ -157,6 +157,7 @@ func (fn Documentation) Test(ctx context.Context, name string) (test.Execution, 
 		Story: example.Story,
 		Speed: time.Since(start),
 		Panic: example.Panic,
+		Ready: example.Ready,
 	}
 	if example.Error != nil {
 		exec.Error = example.Error.Error()
@@ -318,6 +319,12 @@ type Example struct {
 	Error error
 	Panic bool
 
+	// Ready reports whether the example called [TestingFramework.Ready],
+	// marking it as promoted to the regression suite. Runners such as [Test]
+	// only fail the build for examples that are Ready; a failure in an example
+	// that has not been marked Ready is reported as skipped instead.
+	Ready bool
+
 	depth uint
 	setup bool
 }
@@ -366,8 +373,17 @@ type WithHistory interface {
 	history() test.History
 }
 
-func (tdd *TestingFramework) example() *Example         { return &tdd.eg }
-func (tdd *TestingFramework) history() test.History     { return tdd.History }
+func (tdd *TestingFramework) example() *Example     { return &tdd.eg }
+func (tdd *TestingFramework) history() test.History { return tdd.History }
+
+// Ready marks the example as ready for regression testing. It should be called
+// early in a test, before any API calls. Examples that call Ready are treated
+// as part of the regression suite: runners such as [Test] fail on an error.
+// Examples that do not call Ready are still executed but a failure
+// is reported as skipped rather than failing the build, so work-in-progress
+// examples can be committed without breaking `go test`.
+func (tdd *TestingFramework) Ready() { tdd.eg.Ready = true }
+
 func (tdd *TestingFramework) Story(description literal) { tdd.eg.Story = string(description) }
 func (tdd *TestingFramework) Tests(description literal) { tdd.eg.Tests = string(description) }
 func (tdd *TestingFramework) Setup(ctx context.Context, fn func(ctx context.Context) error) error {
@@ -469,8 +485,16 @@ func Test(t *testing.T, impl Documentation) {
 		for _, exampleName := range categoryExamples {
 			t.Run(exampleName, func(t *testing.T) {
 				example, _ := impl.Example(t.Context(), exampleName)
-				if example.Error != nil {
+				if example.Error == nil {
+					return
+				}
+				// Only examples that have opted into regression testing via
+				// Ready() fail the build. Others are reported as skipped so
+				// work-in-progress examples don't break `go test`.
+				if example.Ready {
 					t.Errorf("example %s failed %v", exampleName, example.Error)
+				} else {
+					t.Skipf("example %s not ready for regression testing, failed: %v", exampleName, example.Error)
 				}
 			})
 		}

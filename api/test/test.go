@@ -29,6 +29,7 @@ type Execution struct {
 	Trace []Event       `json:"trace"`
 	Error string        `json:"error,omitzero"`
 	Panic bool          `json:"panic,omitzero"`
+	Ready bool          `json:"ready,omitzero"`
 }
 
 // Event record.
