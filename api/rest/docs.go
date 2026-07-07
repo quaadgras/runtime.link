@@ -23,6 +23,7 @@ import (
 	"runtime.link/api/xray"
 	"runtime.link/pii/email"
 	"runtime.link/xyz"
+	"runtime.link/xyz/enum"
 )
 
 func formatExampleCategory(name string) string {
@@ -534,6 +535,11 @@ func schemaFor(reg oas.Registry, val any) *oas.Schema {
 		ValuesJSON() []json.RawMessage
 	}); ok {
 		schema.Enum = jtype.ValuesJSON()
+	} else if enum.Is(reflect.Zero(rtype).Interface()) {
+		// runtime.link/xyz/enum types are plain named string types with no
+		// ValuesJSON method; their values live in the enum registry.
+		schema.Type = []oas.Type{oas.Types.String}
+		schema.Enum = enum.ValuesJSON(reflect.Zero(rtype).Interface())
 	} else if rtype.Implements(reflect.TypeFor[encoding.TextMarshaler]()) && !rtype.Implements(reflect.TypeFor[json.Marshaler]()) {
 		if rtype == reflect.TypeOf(netip.Addr{}) {
 			schema.AnyOf = []*oas.Schema{

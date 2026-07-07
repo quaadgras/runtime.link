@@ -59,6 +59,21 @@ func Register[T ~string, Cases any]() Cases {
 	return values
 }
 
+// Is reports whether val is a value of a registered enum type. Because enum
+// types are plain named string types with no methods, this registry lookup is
+// the only way to distinguish an enum from an ordinary string at runtime.
+//
+// A non-string value, or a string type that was never passed to [Register],
+// reports false.
+func Is(val any) bool {
+	rvalue := reflect.ValueOf(val)
+	if rvalue.Kind() != reflect.String {
+		return false
+	}
+	_, ok := registry.Load(rvalue.Type())
+	return ok
+}
+
 // Validate reports an error if val is not one of the known values of its enum
 // type, as recorded by [Register]. It returns nil only when val's type has been
 // registered and val is one of that type's values; an unregistered type (or a
