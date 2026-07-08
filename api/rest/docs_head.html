@@ -339,6 +339,25 @@
             opacity: 1;
         }
 
+        /* Test run nav links carry a data-status attribute so the leading
+           glyph reflects the latest pass/fail outcome instead of the generic
+           notepad icon. */
+        .example-link[data-status="pass"]::before {
+            content: "✅";
+        }
+
+        .example-link[data-status="fail"]::before {
+            content: "❌";
+        }
+
+        .example-link[data-status="todo"]::before {
+            content: "📝";
+        }
+
+        .example-link[data-status="none"]::before {
+            content: "⚪";
+        }
+
         .api-ref-link {
             color: var(--link-color, #0066cc);
             text-decoration: none;

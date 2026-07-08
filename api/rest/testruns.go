@@ -42,7 +42,7 @@ func yieldTestRuns(auth api.Auth[*http.Request], yield func(string, http.Handler
 		// when the History implementation does not persist it.
 		fillSummaryFrom(summaries, tests)
 		writeTestRunHead(w)
-		writeTestRunNav(w, tests, "", "")
+		writeTestRunNav(w, tests, summaryStatus(summaries), "", "")
 		w.Write([]byte("<main>"))
 		defer w.Write([]byte("</main></body></html>"))
 		fmt.Fprintf(w, "<h1>Test Runs</h1>")
@@ -67,7 +67,8 @@ func yieldTestRuns(auth api.Auth[*http.Request], yield func(string, http.Handler
 		writeTestRunHead(w)
 		// The detail page lives one path segment deeper than the
 		// overview, so navigation links are prefixed with "../".
-		writeTestRunNav(w, tests, name, "../")
+		summaries, _ := history.Summary(r.Context())
+		writeTestRunNav(w, tests, summaryStatus(summaries), name, "../")
 		w.Write([]byte("<main>"))
 		defer w.Write([]byte("</main></body></html>"))
 		fmt.Fprintf(w, "<h1>%s</h1>", html.EscapeString(formatExampleCategory(name)))
@@ -155,7 +156,9 @@ func writeTestRunHead(w http.ResponseWriter) {
 // writeTestRunNav renders the left-hand navigation listing every test,
 // grouped by category, highlighting the current selection. prefix is
 // prepended to links so pages at different path depths resolve correctly.
-func writeTestRunNav(w http.ResponseWriter, tests map[string][]string, current, prefix string) {
+// status maps a test name to its latest pass/fail glyph so each entry shows
+// its outcome instead of the generic notepad icon.
+func writeTestRunNav(w http.ResponseWriter, tests map[string][]string, status map[string]string, current, prefix string) {
 	if len(tests) == 0 {
 		return
 	}
@@ -185,7 +188,11 @@ func writeTestRunNav(w http.ResponseWriter, tests map[string][]string, current, 
 			if name == current {
 				class = "example-link current-example"
 			}
-			fmt.Fprintf(w, "<a href=\"%stestruns/%s\" class=\"%s\">%s</a>", prefix, name, class, title)
+			state := status[name]
+			if state == "" {
+				state = "none"
+			}
+			fmt.Fprintf(w, "<a href=\"%stestruns/%s\" class=\"%s\" data-status=\"%s\">%s</a>", prefix, name, class, state, title)
 		}
 		fmt.Fprintf(w, "</div></details>")
 	}
@@ -210,6 +217,24 @@ func fillSummaryFrom(summaries []test.Summary, tests map[string][]string) {
 			summaries[i].From = fileOf[summaries[i].Name]
 		}
 	}
+}
+
+// summaryStatus maps each test name to a status keyword (pass, fail, todo)
+// used as the data-status attribute on its nav link, driving the glyph shown
+// by CSS. Tests without a summary are omitted, defaulting to "none".
+func summaryStatus(summaries []test.Summary) map[string]string {
+	status := make(map[string]string, len(summaries))
+	for _, s := range summaries {
+		switch {
+		case s.Fail:
+			status[s.Name] = "fail"
+		case s.Pass:
+			status[s.Name] = "pass"
+		case s.Todo:
+			status[s.Name] = "todo"
+		}
+	}
+	return status
 }
 
 // writeTestRunOverview renders the pass/fail grid for all tests.
