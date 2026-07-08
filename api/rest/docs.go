@@ -396,12 +396,21 @@ func addFieldsToSchema(schema *oas.Schema, reg oas.Registry, rtype reflect.Type)
 			continue
 		}
 		var property = schemaFor(reg, field.Type)
+		if property.Ref != "" {
+			// A bare $ref cannot carry sibling keywords in consumers that
+			// follow the classic "$ref replaces the object" rule (e.g.
+			// Swagger UI), so the field's title/description would be lost.
+			// Wrap the reference in an allOf, which is the portable idiom
+			// for annotating a referenced schema.
+			property = &oas.Schema{AllOf: []*oas.Schema{{Ref: property.Ref}}}
+		}
 		property.Title = oas.Readable(field.Name)
 		if description != "" {
 			if description[0] == '(' {
 				property.Description = oas.Readable(description[1 : len(description)-1])
+			} else {
+				property.Description = oas.Readable(description)
 			}
-			property.Description = oas.Readable(description)
 		}
 		schema.Properties[name] = property
 		if !strings.Contains(string(field.Tag), ",omitempty") && !strings.Contains(string(field.Tag), ",omitzero") && field.Type.Kind() != reflect.Bool && field.Type.Kind() != reflect.Pointer {
@@ -509,7 +518,15 @@ func schemaFor(reg oas.Registry, val any) *oas.Schema {
 	schema := new(oas.Schema)
 	if rtype.PkgPath() != "" {
 		schema.Title = oas.Readable(rtype.Name())
-		useRef = true
+		// Only register a reusable component (and emit a $ref to it) for
+		// structural types. Primitives, enums and other named scalar types
+		// are inlined so that sibling keywords carried alongside the schema
+		// at the use site (e.g. a field's title/description) are not
+		// discarded by consumers such as Swagger UI, which ignore keywords
+		// that sit next to a $ref.
+		if rtype.Kind() == reflect.Struct && rtype != reflect.TypeOf(time.Time{}) {
+			useRef = true
+		}
 	}
 	if doc, ok := nitfc.(interface{ Docs() string }); ok {
 		schema.Description = oas.Readable(doc.Docs())
