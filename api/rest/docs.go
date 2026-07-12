@@ -265,10 +265,6 @@ func operationFor(spec *oas.Document, fn api.Function, path string) (oas.Operati
 	if err := params.parseBody(argumentRules); err != nil {
 		return operation, xray.New(err)
 	}
-	/*responses, err := spec.makeResponses(fn)
-	if err != nil {
-		return xray.Error(err)
-	}*/
 	var bodyArg int = -1
 	var bodyMapping = make(map[oas.PropertyName]*oas.Schema)
 	var bodyArguments int
@@ -364,7 +360,84 @@ func operationFor(spec *oas.Document, fn api.Function, path string) (oas.Operati
 		}
 		operation.Responses[oas.ResponseKeys.Default] = &response
 	}
+	if err := addErrorResponses(spec, fn, &operation); err != nil {
+		return operation, xray.New(err)
+	}
 	return operation, nil
+}
+
+// addErrorResponses documents the error values a function may return, grouped
+// by HTTP status code. It draws on the error types registered against the
+// function's root [api.Structure] via [api.Register] (available as
+// fn.Root.Instances[error]) and, where present, the richer per-case
+// [api.Scenario] metadata (only emitted by [api.Error]-based types, which
+// expose Reflection). A raw error type such as a bare xyz.Switch has no
+// scenarios, so its cases are surfaced through its schema (ValuesJSON) under
+// its declared status instead.
+func addErrorResponses(spec *oas.Document, fn api.Function, operation *oas.Operation) error {
+	errType := reflect.TypeFor[error]()
+	errorTypes := fn.Root.Instances[errType]
+	if len(errorTypes) == 0 {
+		return nil
+	}
+	var applicationJSON = oas.ContentType("application/json")
+
+	// statusText collects the human-readable scenario descriptions that share
+	// a status code so the response description can list them.
+	statusText := make(map[int][]string)
+	for _, scenario := range fn.Root.Scenarios {
+		code, err := strconv.Atoi(scenario.Tags.Get("http"))
+		if err != nil || code == 0 {
+			continue
+		}
+		if scenario.Text != "" {
+			statusText[code] = append(statusText[code], scenario.Text)
+		}
+	}
+
+	for _, rtype := range errorTypes {
+		// Determine the status code for this error type. An api.Error-based
+		// type reports it via StatusHTTP; anything else defaults to 500,
+		// matching how the host handles an un-annotated error.
+		status := http.StatusInternalServerError
+		nitfc := reflect.New(rtype).Interface()
+		if statuser, ok := nitfc.(interface{ StatusHTTP() int }); ok {
+			if code := statuser.StatusHTTP(); code != 0 {
+				status = code
+			}
+		}
+		schema := schemaFor(spec, rtype)
+
+		if operation.Responses == nil {
+			operation.Responses = make(map[oas.ResponseKey]*oas.Response)
+		}
+		key := xyz.Raw[oas.ResponseKey](strconv.Itoa(status))
+		response, ok := operation.Responses[key]
+		if !ok || response == nil {
+			response = &oas.Response{
+				Content: make(map[oas.ContentType]oas.MediaType),
+			}
+			operation.Responses[key] = response
+		}
+		media := response.Content[applicationJSON]
+		media.Schema = schema
+		// Use the first enumerated value as the example error payload so the
+		// generated docs show a concrete error rather than an empty schema.
+		if example, ok := nitfc.(interface {
+			ValuesJSON() []json.RawMessage
+		}); ok {
+			if values := example.ValuesJSON(); len(values) > 0 {
+				media.Example = values[0]
+			}
+		}
+		response.Content[applicationJSON] = media
+		if texts := statusText[status]; len(texts) > 0 {
+			response.Description = oas.Readable(strings.Join(texts, " "))
+		} else if response.Description == "" {
+			response.Description = oas.Readable(http.StatusText(status))
+		}
+	}
+	return nil
 }
 
 func addFieldsToSchema(schema *oas.Schema, reg oas.Registry, rtype reflect.Type) {
