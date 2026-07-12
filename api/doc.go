@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -35,8 +37,23 @@ func (fn Documentation) run(ctx context.Context, name string, test bool) (Exampl
 			Error: err,
 		}, true
 	}
+	// The portion of name before the first ':' selects the environment when
+	// the suite is an [Environments] map; the remainder is the method name. A
+	// bare name (no ':') selects the "" environment, so a single-environment
+	// suite behaves exactly as an ungrouped one.
 	exampleName := name
-	if strings.Contains(name, ":") {
+	if envs, ok := isolated.(Environments); ok {
+		env, method, found := strings.Cut(name, ":")
+		if !found {
+			env, method = "", name
+		}
+		sub, ok := envs[env]
+		if !ok {
+			return Example{}, false
+		}
+		isolated = sub
+		exampleName = method
+	} else if strings.Contains(name, ":") {
 		parts := strings.SplitN(name, ":", 2)
 		exampleName = parts[1]
 	}
@@ -97,6 +114,20 @@ func (fn Documentation) methods(ctx context.Context, keep func(name string) bool
 	template, err := fn(ctx)
 	if err != nil {
 		return nil, err
+	}
+	// Every environment in an [Environments] suite exposes the same set of
+	// methods, so enumerate a single representative and return unprefixed
+	// names. The environment is selected at run time, not listed per method.
+	if envs, ok := template.(Environments); ok {
+		var chosen Examples
+		for _, key := range slices.Sorted(maps.Keys(envs)) {
+			chosen = envs[key]
+			break
+		}
+		if chosen == nil {
+			return nil, nil
+		}
+		template = chosen
 	}
 
 	categories := make(map[string][]string)
@@ -216,6 +247,24 @@ func (fn Documentation) History(ctx context.Context) test.History {
 		return nil
 	}
 	return with.history()
+}
+
+// Environments returns the sorted environment keys when the underlying suite is
+// an [Environments] map, or nil otherwise (a single implicit "" environment).
+// The rest host renders these as the /testruns environment selector.
+func (fn Documentation) Environments(ctx context.Context) []string {
+	if fn == nil {
+		return nil
+	}
+	isolated, err := fn(ctx)
+	if err != nil {
+		return nil
+	}
+	envs, ok := isolated.(Environments)
+	if !ok {
+		return nil
+	}
+	return slices.Sorted(maps.Keys(envs))
 }
 
 // restRoute extracts the "METHOD /path" portion of a rest struct tag, dropping
@@ -360,10 +409,43 @@ type WithTests interface {
 	Test(context.Context, string) (test.Execution, bool)
 	Tests(context.Context) (map[string][]string, error)
 	History(context.Context) test.History
+	// Environments lists the selectable environments a test may be run
+	// against, or nil when the suite is not an [Environments] map (in which
+	// case there is a single implicit "" environment). The builtin /testruns
+	// UI renders these as a selector and dispatches "env:TestName".
+	Environments(context.Context) []string
 }
 
 type Examples interface {
 	example() *Example
+}
+
+// Environments groups one [Examples] suite per named environment (for example
+// "st", "dev", "sit-a"). It is itself an [Examples], so a [Documentation] may
+// return it wherever a single suite is expected: the builtin /testruns UI then
+// offers the environment as a selector and dispatches runs as "env:TestName".
+//
+// The "" key is the default environment; a suite returned directly (not via an
+// Environments map) is treated as if it were Environments{"": suite}, so
+// existing single-environment callers are unaffected.
+type Environments map[string]Examples
+
+// example satisfies [Examples]. The returned value is unused: [Documentation.run]
+// resolves the selected environment's suite before reading its example.
+func (Environments) example() *Example { return &Example{} }
+
+// history satisfies [WithHistory] by returning the first assigned [test.History]
+// found among the environments, so the /testruns endpoints are served whenever
+// any environment carries one. Environments are expected to share a History.
+func (e Environments) history() test.History {
+	for _, key := range slices.Sorted(maps.Keys(e)) {
+		if with, ok := e[key].(WithHistory); ok {
+			if h := with.history(); h != nil {
+				return h
+			}
+		}
+	}
+	return nil
 }
 
 // WithHistory is implemented by test [Examples] implementations that carry an

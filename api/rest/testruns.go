@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/url"
 	"slices"
 	"time"
 
@@ -42,7 +43,7 @@ func yieldTestRuns(auth api.Auth[*http.Request], yield func(string, http.Handler
 		// when the History implementation does not persist it.
 		fillSummaryFrom(summaries, tests)
 		writeTestRunHead(w)
-		writeTestRunNav(w, tests, summaryStatus(summaries), "", "")
+		writeTestRunNav(w, tests, summaryStatus(summaries), "", "", "")
 		w.Write([]byte("<main>"))
 		defer w.Write([]byte("</main></body></html>"))
 		fmt.Fprintf(w, "<h1>Test Runs</h1>")
@@ -64,17 +65,35 @@ func yieldTestRuns(auth api.Auth[*http.Request], yield func(string, http.Handler
 			http.NotFound(w, r)
 			return
 		}
+		// A ?env= selection scopes the history to a single environment. It is
+		// carried by the POST/redirect so a run stays on the same environment's
+		// page. Unknown values fall back to the default "" environment.
+		envs := tested.Environments(r.Context())
+		selected := r.URL.Query().Get("env")
+		if selected != "" && !slices.Contains(envs, selected) {
+			selected = ""
+		}
 		writeTestRunHead(w)
 		// The detail page lives one path segment deeper than the
 		// overview, so navigation links are prefixed with "../".
 		summaries, _ := history.Summary(r.Context())
-		writeTestRunNav(w, tests, summaryStatus(summaries), name, "../")
+		navSuffix := ""
+		if selected != "" {
+			navSuffix = "?env=" + url.QueryEscape(selected)
+		}
+		writeTestRunNav(w, tests, summaryStatus(summaries), name, "../", navSuffix)
 		w.Write([]byte("<main>"))
 		defer w.Write([]byte("</main></body></html>"))
 		fmt.Fprintf(w, "<h1>%s</h1>", html.EscapeString(formatExampleCategory(name)))
-		writeTestRunButton(w, name)
+		writeTestRunButton(w, name, envs, selected)
 
-		runs, err := history.Inspect(r.Context(), name)
+		// History is recorded under the environment-qualified title
+		// ("env:TestName"); the bare name is the default "" environment.
+		inspectName := name
+		if selected != "" {
+			inspectName = selected + ":" + name
+		}
+		runs, err := history.Inspect(r.Context(), inspectName)
 		fmt.Fprintf(w, "<h2>History</h2>")
 		var count int
 		if err == nil && runs != nil {
@@ -97,7 +116,16 @@ func yieldTestRuns(auth api.Auth[*http.Request], yield func(string, http.Handler
 			http.NotFound(w, r)
 			return
 		}
-		exec, ok := tested.Test(r.Context(), name)
+		// When the suite exposes environments, prefix the selected one so the
+		// run dispatches against that environment ("env:TestName") and is
+		// captured under that qualified title. An unknown or absent selection
+		// falls back to the default "" environment.
+		runName, redirect := name, "./"+name
+		if env := r.FormValue("env"); env != "" && slices.Contains(tested.Environments(r.Context()), env) {
+			runName = env + ":" + name
+			redirect = "./" + name + "?env=" + url.QueryEscape(env)
+		}
+		exec, ok := tested.Test(r.Context(), runName)
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -107,7 +135,7 @@ func yieldTestRuns(auth api.Auth[*http.Request], yield func(string, http.Handler
 		_ = history.Capture(r.Context(), exec)
 		// Redirect back to the detail page so a refresh doesn't re-run
 		// the test (POST/redirect/GET).
-		http.Redirect(w, r, "./"+name, http.StatusSeeOther)
+		http.Redirect(w, r, redirect, http.StatusSeeOther)
 	})) {
 		return false
 	}
@@ -157,8 +185,10 @@ func writeTestRunHead(w http.ResponseWriter) {
 // grouped by category, highlighting the current selection. prefix is
 // prepended to links so pages at different path depths resolve correctly.
 // status maps a test name to its latest pass/fail glyph so each entry shows
-// its outcome instead of the generic notepad icon.
-func writeTestRunNav(w http.ResponseWriter, tests map[string][]string, status map[string]string, current, prefix string) {
+// its outcome instead of the generic notepad icon. suffix is appended to each
+// test link (e.g. "?env=st") so an environment selection stays sticky while
+// navigating between tests.
+func writeTestRunNav(w http.ResponseWriter, tests map[string][]string, status map[string]string, current, prefix, suffix string) {
 	if len(tests) == 0 {
 		return
 	}
@@ -192,7 +222,7 @@ func writeTestRunNav(w http.ResponseWriter, tests map[string][]string, status ma
 			if state == "" {
 				state = "none"
 			}
-			fmt.Fprintf(w, "<a href=\"%stestruns/%s\" class=\"%s\" data-status=\"%s\">%s</a>", prefix, name, class, state, title)
+			fmt.Fprintf(w, "<a href=\"%stestruns/%s%s\" class=\"%s\" data-status=\"%s\">%s</a>", prefix, name, suffix, class, state, title)
 		}
 		fmt.Fprintf(w, "</div></details>")
 	}
@@ -294,10 +324,22 @@ func writeTestRunOverview(w http.ResponseWriter, summaries []test.Summary) {
 
 // writeTestRunButton renders the form whose submission runs the test. It
 // POSTs to the current detail URL, which executes the test, records it, and
-// redirects back.
-func writeTestRunButton(w http.ResponseWriter, name string) {
-	fmt.Fprintf(w, `<form method="POST" action="%s"><button type="submit" class="run-test-button">▶ Run test</button></form>`,
-		html.EscapeString(name))
+// redirects back. When envs is non-empty an environment selector is included,
+// preselecting selected, so the run targets a chosen live environment.
+func writeTestRunButton(w http.ResponseWriter, name string, envs []string, selected string) {
+	fmt.Fprintf(w, `<form method="POST" action="%s">`, html.EscapeString(name))
+	if len(envs) > 0 {
+		w.Write([]byte(`<select name="env" class="run-test-env">`))
+		for _, env := range envs {
+			sel := ""
+			if env == selected {
+				sel = " selected"
+			}
+			fmt.Fprintf(w, `<option value="%s"%s>%s</option>`, html.EscapeString(env), sel, html.EscapeString(env))
+		}
+		w.Write([]byte(`</select> `))
+	}
+	w.Write([]byte(`<button type="submit" class="run-test-button">▶ Run test</button></form>`))
 }
 
 // writeTestRunTrace renders the ordered trace of calls captured for an
