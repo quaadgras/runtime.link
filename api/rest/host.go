@@ -88,8 +88,17 @@ var (
 	docs_body []byte
 )
 
+// fieldByIndex walks value along the given field index. It returns an invalid
+// [reflect.Value] (rather than panicking) when it needs to descend into a value
+// that is not a struct — this happens when an operation parsed from one
+// function's rest tag is applied to a call whose argument shape differs (e.g.
+// during trace sampling, where a scalar argument sits where a struct body was
+// expected). Callers must check [reflect.Value.IsValid] before use.
 func fieldByIndex(value reflect.Value, index []int) reflect.Value {
 	if len(index) == 1 {
+		if value.Kind() != reflect.Struct {
+			return reflect.Value{}
+		}
 		return value.Field(index[0])
 	}
 	for i, x := range index {
@@ -103,6 +112,9 @@ func fieldByIndex(value reflect.Value, index []int) reflect.Value {
 				}
 				value = value.Elem()
 			}
+		}
+		if value.Kind() != reflect.Struct {
+			return reflect.Value{}
 		}
 		value = value.Field(x)
 	}

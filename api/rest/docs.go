@@ -90,6 +90,14 @@ func handleDocs(r *http.Request, w http.ResponseWriter, _ func(error) error, imp
 	w.Write([]byte("</main></body></html>"))
 }
 
+// Register the HTTP sampler so [api.Documentation.Test] can attach the sampled
+// request/response of each downstream call to the recorded trace. This lives
+// here (rather than in package api) because the HTTP reconstruction depends on
+// the rest link-layer; registering it avoids an import cycle.
+func init() {
+	api.RegisterSampler(sample)
+}
+
 func sample(fn api.Function, args, rets []reflect.Value) (url string, req, resp []byte, err error) {
 	var spec specification
 	if err := spec.loadOperation(fn); err != nil {
@@ -113,6 +121,12 @@ func sample(fn api.Function, args, rets []reflect.Value) (url string, req, resp 
 			if rules != nil {
 				var mapping = make(map[string]json.RawMessage)
 				for i, result := range rets {
+					// The result rules may name fewer values than the call
+					// actually returns (e.g. when sampling a downstream call
+					// whose arity differs from the tag); only map those named.
+					if i >= len(rules) {
+						break
+					}
 					msg, _ := json.MarshalIndent(result.Interface(), "", "\t")
 					mapping[rules[i]] = json.RawMessage(msg)
 				}

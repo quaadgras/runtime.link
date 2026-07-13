@@ -402,7 +402,8 @@ func writeTestRunEnvScript(w http.ResponseWriter, envs []string) {
 }
 
 // writeTestRunTrace renders the ordered trace of calls captured for an
-// execution, showing arguments and return values where present.
+// execution, showing the sampled downstream request/response where present and
+// otherwise the raw arguments and return values.
 func writeTestRunTrace(w http.ResponseWriter, trace []test.Event) {
 	for _, event := range trace {
 		if event.Note != "" {
@@ -411,15 +412,33 @@ func writeTestRunTrace(w http.ResponseWriter, trace []test.Event) {
 		if event.Call == "" {
 			continue
 		}
-		fmt.Fprintf(w, "<div class=sample><pre>%s</pre>", html.EscapeString(event.Call))
+		// Prefer the sampled HTTP line ("METHOD /path") as the heading when the
+		// call was served over REST; fall back to the call name otherwise.
+		heading := event.Call
+		if event.URL != "" {
+			heading = event.URL
+		}
+		fmt.Fprintf(w, "<div class=sample><pre>%s</pre>", html.EscapeString(heading))
 		if event.Docs != "" {
 			fmt.Fprintf(w, "<div class=\"markdown call-docs\">%s</div>", html.EscapeString(event.Docs))
 		}
-		if len(event.Args) > 0 {
-			fmt.Fprintf(w, "<b>Args:</b><pre>%s</pre>", html.EscapeString(string(event.Args)))
-		}
-		if len(event.Vals) > 0 {
-			fmt.Fprintf(w, "<b>Returns:</b><pre>%s</pre>", html.EscapeString(string(event.Vals)))
+		// When the downstream HTTP exchange was sampled, show the request and
+		// response bodies (matching the documentation example pages); otherwise
+		// fall back to the raw Go arguments and return values.
+		if event.URL != "" {
+			if len(event.Req) > 0 {
+				fmt.Fprintf(w, "<b>Request:</b><pre>%s</pre>", html.EscapeString(string(event.Req)))
+			}
+			if len(event.Resp) > 0 {
+				fmt.Fprintf(w, "<b>Response:</b><pre>%s</pre>", html.EscapeString(string(event.Resp)))
+			}
+		} else {
+			if len(event.Args) > 0 {
+				fmt.Fprintf(w, "<b>Args:</b><pre>%s</pre>", html.EscapeString(string(event.Args)))
+			}
+			if len(event.Vals) > 0 {
+				fmt.Fprintf(w, "<b>Returns:</b><pre>%s</pre>", html.EscapeString(string(event.Vals)))
+			}
 		}
 		fmt.Fprintf(w, "</div>")
 	}

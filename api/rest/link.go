@@ -142,21 +142,29 @@ func (op operation) clientWrite(header http.Header, path string, args []reflect.
 		if param.Location == parameterInVoid {
 			continue
 		}
+		// deref returns an invalid Value when the argument shape does not match
+		// the parsed parameter index (e.g. a scalar where a struct field was
+		// expected). Skip such parameters rather than dereferencing an invalid
+		// Value, which would panic.
+		value := deref(param.Index)
+		if !value.IsValid() {
+			continue
+		}
 		if param.Location&parameterInPath != 0 {
-			var value = fmt.Sprintf("%v", deref(param.Index).Interface())
+			var str = fmt.Sprintf("%v", value.Interface())
 			if !strings.HasSuffix(param.Name, "*") {
-				value = url.PathEscape(value)
+				str = url.PathEscape(str)
 			}
-			path = strings.Replace(path, "{"+param.Name+"}", value, 1)
+			path = strings.Replace(path, "{"+param.Name+"}", str, 1)
 		}
 		if param.Location&parameterInQuery != 0 {
-			op.encodeQuery(param.Name, query, deref(param.Index))
+			op.encodeQuery(param.Name, query, value)
 		}
 		if param.Location == parameterInBody {
 			if op.argumentsNeedsMapping {
-				mapping[param.Name] = deref(param.Index).Interface()
+				mapping[param.Name] = value.Interface()
 			} else {
-				if err := encoder(writer, deref(param.Index).Interface()); err != nil {
+				if err := encoder(writer, value.Interface()); err != nil {
 					return "", "", err
 				}
 			}

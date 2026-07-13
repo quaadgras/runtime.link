@@ -19,6 +19,22 @@ import (
 	"runtime.link/api/xray"
 )
 
+// Sampler reconstructs the downstream HTTP exchange for a function call from
+// its arguments and return values: the "METHOD /path" line, the request body
+// and the response body. It returns an empty url when the function does not
+// correspond to an HTTP endpoint.
+type Sampler func(fn Function, args, vals []reflect.Value) (url string, req, resp []byte, err error)
+
+// sampler holds the registered [Sampler]. It is populated by the rest
+// link-layer (package rest) via [RegisterSampler] to avoid an import cycle,
+// since the HTTP reconstruction lives there.
+var sampler Sampler
+
+// RegisterSampler installs the [Sampler] used by [Documentation.Test] to attach
+// the sampled request/response of each downstream call to the recorded
+// [test.Event]. It is called once, from the rest link-layer's init.
+func RegisterSampler(s Sampler) { sampler = s }
+
 type literal string
 
 type Documentation func(context.Context) (Examples, error)
@@ -209,17 +225,29 @@ func (fn Documentation) Test(ctx context.Context, name string) (test.Execution, 
 			event.Docs = eventDocs(restRoute(step.Call.Tags), step.Call.Docs)
 			event.Args = encodeValues(step.Args)
 			event.Vals = encodeValues(step.Vals)
+			sampleInto(&event, *step.Call, step.Args, step.Vals)
 		}
 		events = append(events, ordered{seq: step.Seq, event: event})
 	}
 	for xray.ContextHas[xray.Call](ctx) {
 		call := xray.ContextGet[xray.Call](ctx)
-		events = append(events, ordered{seq: call.Seq, event: test.Event{
+		event := test.Event{
 			Call: call.Name,
 			Docs: eventDocs(restRoute(call.Tags), DocumentationOf(reflect.StructField{Tag: call.Tags})),
 			Args: encodeValues(call.Args),
 			Vals: encodeValues(call.Vals),
-		}})
+		}
+		// Reconstruct a minimal Function from the recorded call so the HTTP
+		// exchange can be sampled the same way top-level steps are.
+		if call.Func.IsValid() {
+			sampleInto(&event, Function{
+				Name: call.Name,
+				Tags: call.Tags,
+				Type: call.Func.Type(),
+				Impl: call.Func,
+			}, call.Args, call.Vals)
+		}
+		events = append(events, ordered{seq: call.Seq, event: event})
 	}
 	sort.SliceStable(events, func(i, j int) bool {
 		return events[i].seq < events[j].seq
@@ -228,6 +256,28 @@ func (fn Documentation) Test(ctx context.Context, name string) (test.Execution, 
 		exec.Trace = append(exec.Trace, e.event)
 	}
 	return exec, true
+}
+
+// sampleInto attaches the sampled downstream HTTP exchange (url, request and
+// response bodies) to the event, using the [Sampler] registered by the rest
+// link-layer. It is a no-op when no sampler is registered or the function does
+// not correspond to an HTTP endpoint, so a call that isn't served over REST
+// simply carries no sampled exchange.
+func sampleInto(event *test.Event, fn Function, args, vals []reflect.Value) {
+	if sampler == nil {
+		return
+	}
+	url, req, resp, err := sampler(fn, args, vals)
+	if err != nil || url == "" {
+		return
+	}
+	event.URL = url
+	if len(req) > 0 {
+		event.Req = req
+	}
+	if len(resp) > 0 {
+		event.Resp = resp
+	}
 }
 
 // History returns the [test.History] assigned to the underlying test

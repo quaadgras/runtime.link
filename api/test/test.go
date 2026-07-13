@@ -40,6 +40,16 @@ type Event struct {
 	Time time.Time       `json:"time,omitzero"`
 	Args json.RawMessage `json:"args,omitzero"`
 	Vals json.RawMessage `json:"vals,omitzero"`
+
+	// URL, Req and Resp hold the sampled downstream HTTP exchange for this
+	// call: the "METHOD /path" line, the serialized request body and the
+	// serialized response. They are populated for calls that carry a rest tag
+	// (the same representation shown on the documentation example pages) so the
+	// recorded trace can display the request/response each downstream call
+	// produced. Empty when the call is not an HTTP endpoint.
+	URL  string          `json:"url,omitzero"`
+	Req  json.RawMessage `json:"req,omitzero"`
+	Resp json.RawMessage `json:"resp,omitzero"`
 }
 
 type Summary struct {
