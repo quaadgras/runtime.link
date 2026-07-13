@@ -103,6 +103,16 @@ func sample(fn api.Function, args, rets []reflect.Value) (url string, req, resp 
 	if err := spec.loadOperation(fn); err != nil {
 		return "", nil, nil, xray.New(err)
 	}
+	// Parameter indices produced by the parser are relative to the arguments
+	// with any leading context.Context removed (see [api.Function.NumIn]): the
+	// real client path strips it in [api.Function.Make] before calling
+	// clientWrite. xray-recorded calls, however, retain the full argument list
+	// (context at index 0), so drop it here to mirror the client path — without
+	// it clientWrite reads the context as the first body parameter, serializing
+	// it as {"Context":{"Context":...}}.
+	if len(args) > 0 && args[0].IsValid() && args[0].Type() == reflect.TypeOf([0]context.Context{}).Elem() {
+		args = args[1:]
+	}
 	// there will only be one.
 	for path, resource := range spec.Resources {
 		for method, operation := range resource.Operations {

@@ -2,6 +2,7 @@ package rest
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -64,8 +65,56 @@ func TestTraceSamplesDownstreamHTTP(t *testing.T) {
 		if !strings.Contains(string(event.Resp), "hello") {
 			t.Errorf("Echo response = %q, want it to contain the echoed message", event.Resp)
 		}
+		// The sampled request body must carry the message, not the leading
+		// context.Context argument (which would serialize as {"Context":...}).
+		if !strings.Contains(string(event.Req), "hello") {
+			t.Errorf("Echo request = %q, want it to contain the message body", event.Req)
+		}
+		if strings.Contains(string(event.Req), "Context") {
+			t.Errorf("Echo request = %q, leaked the context.Context argument", event.Req)
+		}
 	}
 	if !found {
 		t.Fatalf("no Echo call captured in trace: %+v", exec.Trace)
+	}
+}
+
+// TestSampleSkipsLeadingContext exercises the sampler directly with an argument
+// list that retains the leading context.Context (as xray-recorded calls do),
+// verifying the context is not serialized into the request body.
+func TestSampleSkipsLeadingContext(t *testing.T) {
+	field, ok := reflect.TypeOf(sampleAPI{}).FieldByName("Echo")
+	if !ok {
+		t.Fatal("sampleAPI has no Echo field")
+	}
+	impl := reflect.ValueOf(func(ctx context.Context, message string) (string, error) { return message, nil })
+	fn := api.Function{
+		Name: field.Name,
+		Tags: field.Tag,
+		Type: field.Type,
+		Impl: impl,
+	}
+	// args as xray records them: the full list including the leading context,
+	// each carrying the function's declared parameter type (so the context is
+	// the interface type context.Context, not its concrete implementation).
+	ctxArg := reflect.New(field.Type.In(0)).Elem()
+	ctxArg.Set(reflect.ValueOf(context.Background()))
+	args := []reflect.Value{ctxArg, reflect.ValueOf("hello")}
+	vals := []reflect.Value{reflect.ValueOf("hello")}
+	url, req, resp, err := sample(fn, args, vals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(url, "POST ") || !strings.Contains(url, "/echo") {
+		t.Errorf("url = %q, want POST .../echo", url)
+	}
+	if !strings.Contains(string(req), "hello") {
+		t.Errorf("req = %q, want it to contain the message body", req)
+	}
+	if strings.Contains(string(req), "Context") {
+		t.Errorf("req = %q, leaked the context.Context argument", req)
+	}
+	if !strings.Contains(string(resp), "hello") {
+		t.Errorf("resp = %q, want the echoed message", resp)
 	}
 }
