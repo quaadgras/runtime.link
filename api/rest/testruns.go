@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 
 	"runtime.link/api"
@@ -86,6 +87,7 @@ func yieldTestRuns(auth api.Auth[*http.Request], yield func(string, http.Handler
 		defer w.Write([]byte("</main></body></html>"))
 		fmt.Fprintf(w, "<h1>%s</h1>", html.EscapeString(formatExampleCategory(name)))
 		writeTestRunButton(w, name, envs, selected)
+		writeTestRunEnvScript(w, envs)
 
 		// History is recorded under the environment-qualified title
 		// ("env:TestName"); the bare name is the default "" environment.
@@ -116,14 +118,26 @@ func yieldTestRuns(auth api.Auth[*http.Request], yield func(string, http.Handler
 			http.NotFound(w, r)
 			return
 		}
+		// Build an absolute redirect target from the original request path so
+		// the client lands back on this same detail page regardless of how the
+		// docs handler is mounted (subpath-stripped at "/econnect" or hosted at
+		// the root). A relative redirect ("./"+name) resolves against the
+		// stripped path and 404s. Mirrors the "GET /" handler in host.go.
+		target := r.RequestURI
+		if target == "" {
+			target = r.URL.Path
+		}
+		if i := strings.IndexByte(target, '?'); i >= 0 {
+			target = target[:i]
+		}
 		// When the suite exposes environments, prefix the selected one so the
 		// run dispatches against that environment ("env:TestName") and is
 		// captured under that qualified title. An unknown or absent selection
 		// falls back to the default "" environment.
-		runName, redirect := name, "./"+name
+		runName, redirect := name, target
 		if env := r.FormValue("env"); env != "" && slices.Contains(tested.Environments(r.Context()), env) {
 			runName = env + ":" + name
-			redirect = "./" + name + "?env=" + url.QueryEscape(env)
+			redirect = target + "?env=" + url.QueryEscape(env)
 		}
 		exec, ok := tested.Test(r.Context(), runName)
 		if !ok {
@@ -340,6 +354,51 @@ func writeTestRunButton(w http.ResponseWriter, name string, envs []string, selec
 		w.Write([]byte(`</select> `))
 	}
 	w.Write([]byte(`<button type="submit" class="run-test-button">▶ Run test</button></form>`))
+}
+
+// writeTestRunEnvScript emits a small script that remembers the selected
+// environment in localStorage so it persists across tests and reloads. When
+// the page is opened without an ?env= query (e.g. from the overview or a bare
+// link) and a remembered environment is still offered, it redirects to the
+// scoped URL so the history shown matches the selection. Changing the selector
+// updates the remembered value. No script is emitted when there are no
+// environments to choose between.
+func writeTestRunEnvScript(w http.ResponseWriter, envs []string) {
+	if len(envs) == 0 {
+		return
+	}
+	const script = `<script>
+(function () {
+	var KEY = "testruns.env";
+	var select = document.querySelector("select.run-test-env");
+	if (!select) return;
+	var params = new URLSearchParams(window.location.search);
+	var hasEnv = params.has("env");
+	var saved = null;
+	try { saved = window.localStorage.getItem(KEY); } catch (e) {}
+	// Only treat a saved value as valid if it is still an offered option, so a
+	// removed environment can't trap the page in a redirect loop.
+	var offered = saved && Array.prototype.some.call(select.options, function (o) { return o.value === saved; });
+	if (!hasEnv && offered && saved !== "") {
+		params.set("env", saved);
+		window.location.replace(window.location.pathname + "?" + params.toString());
+		return;
+	}
+	var urlEnv = params.get("env");
+	var urlEnvOffered = urlEnv !== null && Array.prototype.some.call(select.options, function (o) { return o.value === urlEnv; });
+	if (hasEnv && urlEnvOffered) {
+		// The URL already scopes the env (server-rendered selection); remember
+		// it so bare links pick up the latest choice.
+		try { window.localStorage.setItem(KEY, urlEnv); } catch (e) {}
+	} else if (!hasEnv && offered) {
+		select.value = saved;
+	}
+	select.addEventListener("change", function () {
+		try { window.localStorage.setItem(KEY, select.value); } catch (e) {}
+	});
+})();
+</script>`
+	w.Write([]byte(script))
 }
 
 // writeTestRunTrace renders the ordered trace of calls captured for an
