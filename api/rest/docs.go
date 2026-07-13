@@ -124,6 +124,14 @@ func sample(fn api.Function, args, rets []reflect.Value) (url string, req, resp 
 				body.Reset()
 			}
 
+			// clientWrite emits a compact body; re-indent it to match the
+			// response rendering when it is valid JSON, leaving other content
+			// types (e.g. XML) untouched.
+			var pretty bytes.Buffer
+			if json.Indent(&pretty, body.Bytes(), "", "\t") == nil {
+				body = pretty
+			}
+
 			enc := json.NewEncoder(&resp)
 			enc.SetIndent("", "\t")
 
