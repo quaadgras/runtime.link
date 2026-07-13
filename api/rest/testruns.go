@@ -1,6 +1,8 @@
 package rest
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"html"
 	"net/http"
@@ -427,21 +429,33 @@ func writeTestRunTrace(w http.ResponseWriter, trace []test.Event) {
 		// fall back to the raw Go arguments and return values.
 		if event.URL != "" {
 			if len(event.Req) > 0 {
-				fmt.Fprintf(w, "<b>Request:</b><pre>%s</pre>", html.EscapeString(string(event.Req)))
+				fmt.Fprintf(w, "<b>Request:</b><pre>%s</pre>", html.EscapeString(prettyJSON(event.Req)))
 			}
 			if len(event.Resp) > 0 {
-				fmt.Fprintf(w, "<b>Response:</b><pre>%s</pre>", html.EscapeString(string(event.Resp)))
+				fmt.Fprintf(w, "<b>Response:</b><pre>%s</pre>", html.EscapeString(prettyJSON(event.Resp)))
 			}
 		} else {
 			if len(event.Args) > 0 {
-				fmt.Fprintf(w, "<b>Args:</b><pre>%s</pre>", html.EscapeString(string(event.Args)))
+				fmt.Fprintf(w, "<b>Args:</b><pre>%s</pre>", html.EscapeString(prettyJSON(event.Args)))
 			}
 			if len(event.Vals) > 0 {
-				fmt.Fprintf(w, "<b>Returns:</b><pre>%s</pre>", html.EscapeString(string(event.Vals)))
+				fmt.Fprintf(w, "<b>Returns:</b><pre>%s</pre>", html.EscapeString(prettyJSON(event.Vals)))
 			}
 		}
 		fmt.Fprintf(w, "</div>")
 	}
+}
+
+// prettyJSON re-indents a JSON blob for display. Bodies are captured compactly
+// (and older history rows were recorded before indentation was applied), so
+// this formats them at render time. Content that is not valid JSON (e.g. XML)
+// is returned unchanged.
+func prettyJSON(raw []byte) string {
+	var buf bytes.Buffer
+	if json.Indent(&buf, raw, "", "\t") != nil {
+		return string(raw)
+	}
+	return buf.String()
 }
 
 // writeTestRunHistoryEntry renders one recorded execution in a collapsible
