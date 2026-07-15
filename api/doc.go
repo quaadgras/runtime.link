@@ -273,11 +273,32 @@ func sampleInto(event *test.Event, fn Function, args, vals []reflect.Value) {
 	}
 	event.URL = url
 	if len(req) > 0 {
-		event.Req = req
+		event.Req = jsonBody(req)
 	}
 	if len(resp) > 0 {
-		event.Resp = resp
+		event.Resp = jsonBody(resp)
 	}
+}
+
+// jsonBody normalises a sampled request/response body into a value that is
+// safe to store in a [json.RawMessage] field. Most sampled bodies are already
+// JSON (the rest link-layer encodes them), but an fs.File / io.Reader body
+// streams its raw bytes verbatim (an octet-stream upload, see the reader-body
+// branch in the rest client writer), which is not valid JSON. Storing such
+// bytes directly in a json.RawMessage produces a value that fails to
+// re-marshal (json.RawMessage.MarshalJSON validates its contents), breaking
+// any later encode of the enclosing [test.Execution]. When the body is not
+// valid JSON we wrap it as a JSON string so the trace still records what was
+// sent while remaining round-trippable.
+func jsonBody(body []byte) json.RawMessage {
+	if json.Valid(body) {
+		return body
+	}
+	quoted, err := json.Marshal(string(body))
+	if err != nil {
+		return nil
+	}
+	return quoted
 }
 
 // History returns the [test.History] assigned to the underlying test
