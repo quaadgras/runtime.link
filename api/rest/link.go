@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"mime"
 	"net/http"
@@ -164,6 +165,24 @@ func (op operation) clientWrite(header http.Header, path string, args []reflect.
 			if op.argumentsNeedsMapping {
 				mapping[param.Name] = value.Interface()
 			} else {
+				// An fs.File / io.Reader body streams its raw bytes as the
+				// request body (e.g. a file upload) rather than being encoded
+				// as JSON. Content-Type becomes application/octet-stream so the
+				// server binds the body directly. A filename from fs.File's
+				// Stat is surfaced via Content-Disposition.
+				if rdr, ok := value.Interface().(io.Reader); ok {
+					if file, ok := value.Interface().(fs.File); ok {
+						if info, err := file.Stat(); err == nil && info.Name() != "" {
+							header.Set("Content-Disposition",
+								fmt.Sprintf("attachment; filename=%q", info.Name()))
+						}
+					}
+					if _, err := io.Copy(writer, rdr); err != nil {
+						return "", "", err
+					}
+					contentType = "application/octet-stream"
+					continue
+				}
 				if err := encoder(writer, value.Interface()); err != nil {
 					return "", "", err
 				}

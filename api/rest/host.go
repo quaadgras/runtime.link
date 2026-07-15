@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"io/fs"
 	"iter"
 	"mime"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"runtime.link/api"
 	"runtime.link/api/cors"
@@ -28,6 +30,50 @@ import (
 	"runtime.link/api/internal/rtags"
 	"runtime.link/api/xray"
 )
+
+// requestFile adapts an incoming *http.Request body to an fs.File, so a handler
+// can take an fs.File body parameter and read the uploaded bytes as they stream
+// off the wire (no buffering into memory by the framework). Stat() synthesizes
+// an fs.FileInfo from the request headers: the name from the Content-Disposition
+// filename (falling back to the last path segment), and the size from
+// Content-Length (-1 when unknown, e.g. chunked transfer).
+type requestFile struct {
+	body io.ReadCloser
+	info requestFileInfo
+}
+
+func newRequestFile(r *http.Request) *requestFile {
+	name := ""
+	if cd := r.Header.Get("Content-Disposition"); cd != "" {
+		if _, params, err := mime.ParseMediaType(cd); err == nil {
+			name = params["filename"]
+		}
+	}
+	if name == "" {
+		name = path.Base(r.URL.Path)
+	}
+	return &requestFile{
+		body: r.Body,
+		info: requestFileInfo{name: name, size: r.ContentLength},
+	}
+}
+
+func (f *requestFile) Read(p []byte) (int, error) { return f.body.Read(p) }
+func (f *requestFile) Close() error               { return f.body.Close() }
+func (f *requestFile) Stat() (fs.FileInfo, error) { return f.info, nil }
+
+// requestFileInfo is the fs.FileInfo synthesized for a streamed request body.
+type requestFileInfo struct {
+	name string
+	size int64
+}
+
+func (i requestFileInfo) Name() string       { return i.name }
+func (i requestFileInfo) Size() int64        { return i.size }
+func (i requestFileInfo) Mode() fs.FileMode  { return 0 }
+func (i requestFileInfo) ModTime() time.Time { return time.Time{} }
+func (i requestFileInfo) IsDir() bool        { return false }
+func (i requestFileInfo) Sys() any           { return nil }
 
 // scanTypeOf resolves a textual parameter value into a concrete xyz.TypeOf[T]
 // value for a tagged-union type selector (e.g. a filter field declared as
@@ -904,6 +950,14 @@ func attach(auth api.Auth[*http.Request], yield func(string, http.Handler) bool,
 								*dst = r.Body
 							case *io.ReadCloser:
 								*dst = r.Body
+								closeBody = false
+							case *fs.File:
+								// Stream the request body as a file: the handler
+								// reads bytes straight off the wire, with a
+								// synthesized fs.FileInfo (name from the
+								// Content-Disposition filename, size from
+								// Content-Length). The handler owns closing it.
+								*dst = newRequestFile(r)
 								closeBody = false
 							default:
 								if !decoderOk {
