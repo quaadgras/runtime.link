@@ -652,4 +652,21 @@ func Test(t *testing.T, impl Documentation) {
 			})
 		}
 	}
+	tests, err := impl.Tests(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, categoryTests := range tests {
+		for _, testName := range categoryTests {
+			t.Run(testName, func(t *testing.T) {
+				exec, ok := impl.Test(t.Context(), testName)
+				if !ok {
+					t.Fatalf("test %s not found", testName)
+				}
+				if exec.Ready && exec.Error != "" {
+					t.Errorf("test %s failed: %s", testName, exec.Error)
+				}
+			})
+		}
+	}
 }

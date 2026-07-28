@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/netip"
 	"path"
@@ -330,7 +331,7 @@ func operationFor(spec *oas.Document, fn api.Function, path string) (oas.Operati
 	if len(bodyMapping) == 0 && bodyArg != -1 {
 		btype := fn.In(bodyArg)
 		switch btype {
-		case reflect.TypeFor[io.Reader](), reflect.TypeFor[io.ReadCloser](), reflect.TypeFor[io.WriterTo](), reflect.TypeFor[io.LimitedReader]():
+		case reflect.TypeFor[fs.File](), reflect.TypeFor[io.Reader](), reflect.TypeFor[io.ReadCloser](), reflect.TypeFor[io.WriterTo](), reflect.TypeFor[io.LimitedReader]():
 			mime := fn.Tags.Get("mime")
 			if mime == "" {
 				mime = "application/octet-stream"
