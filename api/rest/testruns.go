@@ -41,7 +41,7 @@ func yieldTestRuns(auth api.Auth[*http.Request], yield func(string, http.Handler
 		// tests (grouped by file), so the overview can group by file even
 		// when the History implementation does not persist it.
 		fillSummaryFrom(summaries, tests)
-		writeTestRunHead(w)
+		writeTestRunHead(w, false)
 		writeTestRunNav(w, tests, "", "")
 		w.Write([]byte("<main>"))
 		defer w.Write([]byte("</main></body></html>"))
@@ -64,7 +64,7 @@ func yieldTestRuns(auth api.Auth[*http.Request], yield func(string, http.Handler
 			http.NotFound(w, r)
 			return
 		}
-		writeTestRunHead(w)
+		writeTestRunHead(w, true)
 		// The detail page lives one path segment deeper than the
 		// overview, so navigation links are prefixed with "../".
 		writeTestRunNav(w, tests, name, "../")
@@ -144,11 +144,16 @@ func testRunStatus(errText string, panicked bool) (glyph, label string) {
 }
 
 // writeTestRunHead writes the shared HTML head + opening body tag for the
-// test run pages, reusing the documentation stylesheet.
-func writeTestRunHead(w http.ResponseWriter) {
+// test run pages, reusing the documentation stylesheet. nested selects the
+// head variant whose asset URLs resolve from one path segment deeper.
+func writeTestRunHead(w http.ResponseWriter, nested bool) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte("<!DOCTYPE html>"))
-	w.Write(docs_head)
+	if nested {
+		w.Write(docs_head_nested)
+	} else {
+		w.Write(docs_head)
+	}
 	w.Write([]byte("<body>"))
 }
 
