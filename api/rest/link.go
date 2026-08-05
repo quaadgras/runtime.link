@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"mime"
 	"net/http"
@@ -142,21 +143,47 @@ func (op operation) clientWrite(header http.Header, path string, args []reflect.
 		if param.Location == parameterInVoid {
 			continue
 		}
+		// deref returns an invalid Value when the argument shape does not match
+		// the parsed parameter index (e.g. a scalar where a struct field was
+		// expected). Skip such parameters rather than dereferencing an invalid
+		// Value, which would panic.
+		value := deref(param.Index)
+		if !value.IsValid() {
+			continue
+		}
 		if param.Location&parameterInPath != 0 {
-			var value = fmt.Sprintf("%v", deref(param.Index).Interface())
+			var str = fmt.Sprintf("%v", value.Interface())
 			if !strings.HasSuffix(param.Name, "*") {
-				value = url.PathEscape(value)
+				str = url.PathEscape(str)
 			}
-			path = strings.Replace(path, "{"+param.Name+"}", value, 1)
+			path = strings.Replace(path, "{"+param.Name+"}", str, 1)
 		}
 		if param.Location&parameterInQuery != 0 {
-			op.encodeQuery(param.Name, query, deref(param.Index))
+			op.encodeQuery(param.Name, query, value)
 		}
 		if param.Location == parameterInBody {
 			if op.argumentsNeedsMapping {
-				mapping[param.Name] = deref(param.Index).Interface()
+				mapping[param.Name] = value.Interface()
 			} else {
-				if err := encoder(writer, deref(param.Index).Interface()); err != nil {
+				// An fs.File / io.Reader body streams its raw bytes as the
+				// request body (e.g. a file upload) rather than being encoded
+				// as JSON. Content-Type becomes application/octet-stream so the
+				// server binds the body directly. A filename from fs.File's
+				// Stat is surfaced via Content-Disposition.
+				if rdr, ok := value.Interface().(io.Reader); ok {
+					if file, ok := value.Interface().(fs.File); ok {
+						if info, err := file.Stat(); err == nil && info.Name() != "" {
+							header.Set("Content-Disposition",
+								fmt.Sprintf("attachment; filename=%q", info.Name()))
+						}
+					}
+					if _, err := io.Copy(writer, rdr); err != nil {
+						return "", "", err
+					}
+					contentType = "application/octet-stream"
+					continue
+				}
+				if err := encoder(writer, value.Interface()); err != nil {
 					return "", "", err
 				}
 			}

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -16,6 +18,22 @@ import (
 	"runtime.link/api/test"
 	"runtime.link/api/xray"
 )
+
+// Sampler reconstructs the downstream HTTP exchange for a function call from
+// its arguments and return values: the "METHOD /path" line, the request body
+// and the response body. It returns an empty url when the function does not
+// correspond to an HTTP endpoint.
+type Sampler func(fn Function, args, vals []reflect.Value) (url string, req, resp []byte, err error)
+
+// sampler holds the registered [Sampler]. It is populated by the rest
+// link-layer (package rest) via [RegisterSampler] to avoid an import cycle,
+// since the HTTP reconstruction lives there.
+var sampler Sampler
+
+// RegisterSampler installs the [Sampler] used by [Documentation.Test] to attach
+// the sampled request/response of each downstream call to the recorded
+// [test.Event]. It is called once, from the rest link-layer's init.
+func RegisterSampler(s Sampler) { sampler = s }
 
 type literal string
 
@@ -35,8 +53,23 @@ func (fn Documentation) run(ctx context.Context, name string, test bool) (Exampl
 			Error: err,
 		}, true
 	}
+	// The portion of name before the first ':' selects the environment when
+	// the suite is an [Environments] map; the remainder is the method name. A
+	// bare name (no ':') selects the "" environment, so a single-environment
+	// suite behaves exactly as an ungrouped one.
 	exampleName := name
-	if strings.Contains(name, ":") {
+	if envs, ok := isolated.(Environments); ok {
+		env, method, found := strings.Cut(name, ":")
+		if !found {
+			env, method = "", name
+		}
+		sub, ok := envs[env]
+		if !ok {
+			return Example{}, false
+		}
+		isolated = sub
+		exampleName = method
+	} else if strings.Contains(name, ":") {
 		parts := strings.SplitN(name, ":", 2)
 		exampleName = parts[1]
 	}
@@ -98,6 +131,20 @@ func (fn Documentation) methods(ctx context.Context, keep func(name string) bool
 	if err != nil {
 		return nil, err
 	}
+	// Every environment in an [Environments] suite exposes the same set of
+	// methods, so enumerate a single representative and return unprefixed
+	// names. The environment is selected at run time, not listed per method.
+	if envs, ok := template.(Environments); ok {
+		var chosen Examples
+		for _, key := range slices.Sorted(maps.Keys(envs)) {
+			chosen = envs[key]
+			break
+		}
+		if chosen == nil {
+			return nil, nil
+		}
+		template = chosen
+	}
 
 	categories := make(map[string][]string)
 	var rtype = reflect.TypeOf(template)
@@ -157,6 +204,7 @@ func (fn Documentation) Test(ctx context.Context, name string) (test.Execution, 
 		Story: example.Story,
 		Speed: time.Since(start),
 		Panic: example.Panic,
+		Ready: example.Ready,
 	}
 	if example.Error != nil {
 		exec.Error = example.Error.Error()
@@ -177,17 +225,29 @@ func (fn Documentation) Test(ctx context.Context, name string) (test.Execution, 
 			event.Docs = eventDocs(restRoute(step.Call.Tags), step.Call.Docs)
 			event.Args = encodeValues(step.Args)
 			event.Vals = encodeValues(step.Vals)
+			sampleInto(&event, *step.Call, step.Args, step.Vals)
 		}
 		events = append(events, ordered{seq: step.Seq, event: event})
 	}
 	for xray.ContextHas[xray.Call](ctx) {
 		call := xray.ContextGet[xray.Call](ctx)
-		events = append(events, ordered{seq: call.Seq, event: test.Event{
+		event := test.Event{
 			Call: call.Name,
 			Docs: eventDocs(restRoute(call.Tags), DocumentationOf(reflect.StructField{Tag: call.Tags})),
 			Args: encodeValues(call.Args),
 			Vals: encodeValues(call.Vals),
-		}})
+		}
+		// Reconstruct a minimal Function from the recorded call so the HTTP
+		// exchange can be sampled the same way top-level steps are.
+		if call.Func.IsValid() {
+			sampleInto(&event, Function{
+				Name: call.Name,
+				Tags: call.Tags,
+				Type: call.Func.Type(),
+				Impl: call.Func,
+			}, call.Args, call.Vals)
+		}
+		events = append(events, ordered{seq: call.Seq, event: event})
 	}
 	sort.SliceStable(events, func(i, j int) bool {
 		return events[i].seq < events[j].seq
@@ -196,6 +256,49 @@ func (fn Documentation) Test(ctx context.Context, name string) (test.Execution, 
 		exec.Trace = append(exec.Trace, e.event)
 	}
 	return exec, true
+}
+
+// sampleInto attaches the sampled downstream HTTP exchange (url, request and
+// response bodies) to the event, using the [Sampler] registered by the rest
+// link-layer. It is a no-op when no sampler is registered or the function does
+// not correspond to an HTTP endpoint, so a call that isn't served over REST
+// simply carries no sampled exchange.
+func sampleInto(event *test.Event, fn Function, args, vals []reflect.Value) {
+	if sampler == nil {
+		return
+	}
+	url, req, resp, err := sampler(fn, args, vals)
+	if err != nil || url == "" {
+		return
+	}
+	event.URL = url
+	if len(req) > 0 {
+		event.Req = jsonBody(req)
+	}
+	if len(resp) > 0 {
+		event.Resp = jsonBody(resp)
+	}
+}
+
+// jsonBody normalises a sampled request/response body into a value that is
+// safe to store in a [json.RawMessage] field. Most sampled bodies are already
+// JSON (the rest link-layer encodes them), but an fs.File / io.Reader body
+// streams its raw bytes verbatim (an octet-stream upload, see the reader-body
+// branch in the rest client writer), which is not valid JSON. Storing such
+// bytes directly in a json.RawMessage produces a value that fails to
+// re-marshal (json.RawMessage.MarshalJSON validates its contents), breaking
+// any later encode of the enclosing [test.Execution]. When the body is not
+// valid JSON we wrap it as a JSON string so the trace still records what was
+// sent while remaining round-trippable.
+func jsonBody(body []byte) json.RawMessage {
+	if json.Valid(body) {
+		return body
+	}
+	quoted, err := json.Marshal(string(body))
+	if err != nil {
+		return nil
+	}
+	return quoted
 }
 
 // History returns the [test.History] assigned to the underlying test
@@ -215,6 +318,24 @@ func (fn Documentation) History(ctx context.Context) test.History {
 		return nil
 	}
 	return with.history()
+}
+
+// Environments returns the sorted environment keys when the underlying suite is
+// an [Environments] map, or nil otherwise (a single implicit "" environment).
+// The rest host renders these as the /testruns environment selector.
+func (fn Documentation) Environments(ctx context.Context) []string {
+	if fn == nil {
+		return nil
+	}
+	isolated, err := fn(ctx)
+	if err != nil {
+		return nil
+	}
+	envs, ok := isolated.(Environments)
+	if !ok {
+		return nil
+	}
+	return slices.Sorted(maps.Keys(envs))
 }
 
 // restRoute extracts the "METHOD /path" portion of a rest struct tag, dropping
@@ -318,6 +439,12 @@ type Example struct {
 	Error error
 	Panic bool
 
+	// Ready reports whether the example called [TestingFramework.Ready],
+	// marking it as promoted to the regression suite. Runners such as [Test]
+	// only fail the build for examples that are Ready; a failure in an example
+	// that has not been marked Ready is reported as skipped instead.
+	Ready bool
+
 	depth uint
 	setup bool
 }
@@ -353,10 +480,43 @@ type WithTests interface {
 	Test(context.Context, string) (test.Execution, bool)
 	Tests(context.Context) (map[string][]string, error)
 	History(context.Context) test.History
+	// Environments lists the selectable environments a test may be run
+	// against, or nil when the suite is not an [Environments] map (in which
+	// case there is a single implicit "" environment). The builtin /testruns
+	// UI renders these as a selector and dispatches "env:TestName".
+	Environments(context.Context) []string
 }
 
 type Examples interface {
 	example() *Example
+}
+
+// Environments groups one [Examples] suite per named environment (for example
+// "st", "dev", "sit-a"). It is itself an [Examples], so a [Documentation] may
+// return it wherever a single suite is expected: the builtin /testruns UI then
+// offers the environment as a selector and dispatches runs as "env:TestName".
+//
+// The "" key is the default environment; a suite returned directly (not via an
+// Environments map) is treated as if it were Environments{"": suite}, so
+// existing single-environment callers are unaffected.
+type Environments map[string]Examples
+
+// example satisfies [Examples]. The returned value is unused: [Documentation.run]
+// resolves the selected environment's suite before reading its example.
+func (Environments) example() *Example { return &Example{} }
+
+// history satisfies [WithHistory] by returning the first assigned [test.History]
+// found among the environments, so the /testruns endpoints are served whenever
+// any environment carries one. Environments are expected to share a History.
+func (e Environments) history() test.History {
+	for _, key := range slices.Sorted(maps.Keys(e)) {
+		if with, ok := e[key].(WithHistory); ok {
+			if h := with.history(); h != nil {
+				return h
+			}
+		}
+	}
+	return nil
 }
 
 // WithHistory is implemented by test [Examples] implementations that carry an
@@ -366,8 +526,17 @@ type WithHistory interface {
 	history() test.History
 }
 
-func (tdd *TestingFramework) example() *Example         { return &tdd.eg }
-func (tdd *TestingFramework) history() test.History     { return tdd.History }
+func (tdd *TestingFramework) example() *Example     { return &tdd.eg }
+func (tdd *TestingFramework) history() test.History { return tdd.History }
+
+// Ready marks the example as ready for regression testing. It should be called
+// early in a test, before any API calls. Examples that call Ready are treated
+// as part of the regression suite: runners such as [Test] fail on an error.
+// Examples that do not call Ready are still executed but a failure
+// is reported as skipped rather than failing the build, so work-in-progress
+// examples can be committed without breaking `go test`.
+func (tdd *TestingFramework) Ready() { tdd.eg.Ready = true }
+
 func (tdd *TestingFramework) Story(description literal) { tdd.eg.Story = string(description) }
 func (tdd *TestingFramework) Tests(description literal) { tdd.eg.Tests = string(description) }
 func (tdd *TestingFramework) Setup(ctx context.Context, fn func(ctx context.Context) error) error {
@@ -469,8 +638,33 @@ func Test(t *testing.T, impl Documentation) {
 		for _, exampleName := range categoryExamples {
 			t.Run(exampleName, func(t *testing.T) {
 				example, _ := impl.Example(t.Context(), exampleName)
-				if example.Error != nil {
+				if example.Error == nil {
+					return
+				}
+				// Only examples that have opted into regression testing via
+				// Ready() fail the build. Others are reported as skipped so
+				// work-in-progress examples don't break `go test`.
+				if example.Ready {
 					t.Errorf("example %s failed %v", exampleName, example.Error)
+				} else {
+					t.Skipf("example %s not ready for regression testing, failed: %v", exampleName, example.Error)
+				}
+			})
+		}
+	}
+	tests, err := impl.Tests(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, categoryTests := range tests {
+		for _, testName := range categoryTests {
+			t.Run(testName, func(t *testing.T) {
+				exec, ok := impl.Test(t.Context(), testName)
+				if !ok {
+					t.Fatalf("test %s not found", testName)
+				}
+				if exec.Ready && exec.Error != "" {
+					t.Errorf("test %s failed: %s", testName, exec.Error)
 				}
 			})
 		}

@@ -80,6 +80,8 @@ func (v taggedMethods[Storage, Values]) Get() (Storage, bool) {
 	return v.ram, v.tag != nil
 }
 
+func (v taggedMethods[Storage, Values]) IsZero() bool { return v.tag == nil }
+
 func (v taggedMethods[Storage, Values]) Interface() any { return v.tag.get(&v) }
 
 // String implements [fmt.Stringer].
@@ -689,7 +691,12 @@ func (v caseMethods[Variant, Constraint]) Key() (string, error) {
 
 func (v caseMethods[Variant, Constraint]) ValuesJSON() (oneof []json.RawMessage) {
 	var zero Variant
-	rtype := reflect.TypeOf(zero)
+	return caseValuesJSON(reflect.TypeOf(zero))
+}
+
+// caseValuesJSON returns the JSON-encoded keys for every case of the variant
+// type. Kept non-generic so it compiles once instead of per [Case] instance.
+func caseValuesJSON(rtype reflect.Type) (oneof []json.RawMessage) {
 	if rtype.Kind() != reflect.Struct || rtype.NumField() == 0 {
 		return nil
 	}

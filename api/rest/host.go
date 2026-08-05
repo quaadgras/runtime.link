@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"io/fs"
 	"iter"
 	"mime"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"runtime.link/api"
 	"runtime.link/api/cors"
@@ -28,6 +30,91 @@ import (
 	"runtime.link/api/internal/rtags"
 	"runtime.link/api/xray"
 )
+
+// requestFile adapts an incoming *http.Request body to an fs.File, so a handler
+// can take an fs.File body parameter and read the uploaded bytes as they stream
+// off the wire (no buffering into memory by the framework). Stat() synthesizes
+// an fs.FileInfo from the request headers: the name from the Content-Disposition
+// filename (falling back to the last path segment), and the size from
+// Content-Length (-1 when unknown, e.g. chunked transfer).
+type requestFile struct {
+	body io.ReadCloser
+	info requestFileInfo
+}
+
+func newRequestFile(r *http.Request) *requestFile {
+	name := ""
+	if cd := r.Header.Get("Content-Disposition"); cd != "" {
+		if _, params, err := mime.ParseMediaType(cd); err == nil {
+			name = params["filename"]
+		}
+	}
+	if name == "" {
+		name = path.Base(r.URL.Path)
+	}
+	return &requestFile{
+		body: r.Body,
+		info: requestFileInfo{name: name, size: r.ContentLength},
+	}
+}
+
+func (f *requestFile) Read(p []byte) (int, error) { return f.body.Read(p) }
+func (f *requestFile) Close() error               { return f.body.Close() }
+func (f *requestFile) Stat() (fs.FileInfo, error) { return f.info, nil }
+
+// requestFileInfo is the fs.FileInfo synthesized for a streamed request body.
+type requestFileInfo struct {
+	name string
+	size int64
+}
+
+func (i requestFileInfo) Name() string       { return i.name }
+func (i requestFileInfo) Size() int64        { return i.size }
+func (i requestFileInfo) Mode() fs.FileMode  { return 0 }
+func (i requestFileInfo) ModTime() time.Time { return time.Time{} }
+func (i requestFileInfo) IsDir() bool        { return false }
+func (i requestFileInfo) Sys() any           { return nil }
+
+// scanTypeOf resolves a textual parameter value into a concrete xyz.TypeOf[T]
+// value for a tagged-union type selector (e.g. a filter field declared as
+// xyz.TypeOf[Account]). Such a field is an interface, so it can't be scanned
+// into directly; instead we recover the underlying union type from the
+// interface's unexported value() T method, enumerate its cases via Values(),
+// and match name against each case's Key()/String(). ok reports whether ref
+// was a TypeOf interface that could be resolved.
+func scanTypeOf(ref reflect.Value, name string) (ok bool, err error) {
+	if ref.Kind() != reflect.Ptr || ref.Elem().Kind() != reflect.Interface {
+		return false, nil
+	}
+	interfaceType := ref.Elem().Type()
+	value, has := interfaceType.MethodByName("value")
+	if !has || value.Type.NumOut() != 1 {
+		return false, nil
+	}
+	variantType := value.Type.Out(0)
+	values := reflect.New(variantType).Elem().MethodByName("Values")
+	if !values.IsValid() || values.Type().NumIn() != 1 || values.Type().NumOut() != 1 {
+		return false, nil
+	}
+	// Values(internal{}) returns a struct whose fields are the Case accessors,
+	// each of which already implements the TypeOf[T] interface.
+	cases := values.Call([]reflect.Value{reflect.New(values.Type().In(0)).Elem()})[0]
+	for i := 0; i < cases.NumField(); i++ {
+		field := cases.Field(i)
+		typed, isCase := field.Interface().(interface {
+			Key() (string, error)
+			String() string
+		})
+		if !isCase {
+			continue
+		}
+		if key, kerr := typed.Key(); kerr == nil && key == name || typed.String() == name {
+			ref.Elem().Set(field)
+			return true, nil
+		}
+	}
+	return true, fmt.Errorf("no case named %q in %v", name, variantType)
+}
 
 func apiReferenceURL(fn api.Function) string {
 	var categoryName string
@@ -47,8 +134,17 @@ var (
 	docs_body []byte
 )
 
+// fieldByIndex walks value along the given field index. It returns an invalid
+// [reflect.Value] (rather than panicking) when it needs to descend into a value
+// that is not a struct — this happens when an operation parsed from one
+// function's rest tag is applied to a call whose argument shape differs (e.g.
+// during trace sampling, where a scalar argument sits where a struct body was
+// expected). Callers must check [reflect.Value.IsValid] before use.
 func fieldByIndex(value reflect.Value, index []int) reflect.Value {
 	if len(index) == 1 {
+		if value.Kind() != reflect.Struct {
+			return reflect.Value{}
+		}
 		return value.Field(index[0])
 	}
 	for i, x := range index {
@@ -62,6 +158,9 @@ func fieldByIndex(value reflect.Value, index []int) reflect.Value {
 				}
 				value = value.Elem()
 			}
+		}
+		if value.Kind() != reflect.Struct {
+			return reflect.Value{}
 		}
 		value = value.Field(x)
 	}
@@ -855,6 +954,14 @@ func attach(auth api.Auth[*http.Request], yield func(string, http.Handler) bool,
 							case *io.ReadCloser:
 								*dst = r.Body
 								closeBody = false
+							case *fs.File:
+								// Stream the request body as a file: the handler
+								// reads bytes straight off the wire, with a
+								// synthesized fs.FileInfo (name from the
+								// Content-Disposition filename, size from
+								// Content-Length). The handler owns closing it.
+								*dst = newRequestFile(r)
+								closeBody = false
 							default:
 								if !decoderOk {
 									http.Error(w, http.StatusText(http.StatusUnprocessableEntity), http.StatusUnprocessableEntity)
@@ -911,6 +1018,11 @@ func attach(auth api.Auth[*http.Request], yield func(string, http.Handler) bool,
 										}
 									}
 									if err := decoder.UnmarshalJSON([]byte(strconv.Quote(val))); err != nil {
+										handle(ctx, fn, auth, w, fmt.Errorf("please provide a valid %v (%w)", ref.Type().String(), err))
+										return
+									}
+								} else if ok, err := scanTypeOf(ref, val); ok {
+									if err != nil {
 										handle(ctx, fn, auth, w, fmt.Errorf("please provide a valid %v (%w)", ref.Type().String(), err))
 										return
 									}

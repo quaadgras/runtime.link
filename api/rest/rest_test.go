@@ -3,10 +3,13 @@ package rest_test
 import (
 	"context"
 	"errors"
+	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"runtime.link/api"
 	"runtime.link/api/rest"
@@ -392,5 +395,58 @@ func TestNilPointerFieldInQuery(t *testing.T) {
 	}
 	if result != "hello" {
 		t.Fatalf("got %q, want %q", result, "hello")
+	}
+}
+
+// TestFileBodyRoundTrip proves an fs.File body parameter works end-to-end over
+// REST: the client streams the file's raw bytes as the request body and the
+// handler receives them as an fs.File (reading the bytes and the synthesized
+// name/size from Stat). This backs customer document uploads (e.g. econnect
+// ProcessUpload), where the browser POSTs raw image bytes to an fs.File body.
+func TestFileBodyRoundTrip(t *testing.T) {
+	type API struct {
+		api.Specification
+
+		Upload func(context.Context, string, fs.File) (string, error) `rest:"POST /upload/{id=%v} echo"`
+	}
+	impl := API{
+		Upload: func(ctx context.Context, id string, file fs.File) (string, error) {
+			if file == nil {
+				return "", errors.New("nil file")
+			}
+			defer file.Close()
+			data, err := io.ReadAll(file)
+			if err != nil {
+				return "", err
+			}
+			name := ""
+			if info, err := file.Stat(); err == nil {
+				name = info.Name()
+			}
+			return id + ":" + name + ":" + string(data), nil
+		},
+	}
+	handler, err := rest.Handler(nil, impl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	client := api.Import[API](rest.API, server.URL, server.Client())
+
+	fsys := fstest.MapFS{"licence.jpg": &fstest.MapFile{Data: []byte("front-of-licence")}}
+	file, err := fsys.Open("licence.jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.Upload(context.Background(), "tok123", file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// id echoes the path param; the body bytes stream through; the filename
+	// rides on the Content-Disposition the client set from fs.File's Stat.
+	if want := "tok123:licence.jpg:front-of-licence"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }
