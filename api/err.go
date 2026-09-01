@@ -58,6 +58,8 @@ type registrator interface {
 // I.
 type Register[Interface any, Implementation any] struct{}
 
+type Document[Interface any, Implementation any] = Register[Interface, Implementation]
+
 func (Register[I, V]) addToStructure(field reflect.StructField, structure *Structure) {
 	if structure.Instances == nil {
 		structure.Instances = make(map[reflect.Type][]reflect.Type)
