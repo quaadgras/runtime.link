@@ -401,16 +401,35 @@ func operationFor(spec *oas.Document, fn api.Function, path string) (oas.Operati
 // its declared status instead.
 func addErrorResponses(spec *oas.Document, fn api.Function, operation *oas.Operation) error {
 	errType := reflect.TypeFor[error]()
-	errorTypes := fn.Root.Instances[errType]
+
+	// Prefer the error interface the function actually declares as its last
+	// return value (e.g. ErrorForLogin), so each endpoint documents only the
+	// errors registered against that interface. Endpoints that return the bare
+	// [error] interface fall back to the API-wide set registered at the root.
+	scopeType := errType
+	if raw := fn.Type; raw.NumOut() > 0 {
+		if last := raw.Out(raw.NumOut() - 1); last.Implements(errType) {
+			scopeType = last
+		}
+	}
+	errorTypes := fn.Root.Instances[scopeType]
+	if len(errorTypes) == 0 && scopeType != errType {
+		scopeType = errType
+		errorTypes = fn.Root.Instances[errType]
+	}
 	if len(errorTypes) == 0 {
 		return nil
 	}
 	var applicationJSON = oas.ContentType("application/json")
 
 	// statusText collects the human-readable scenario descriptions that share
-	// a status code so the response description can list them.
+	// a status code so the response description can list them. Only scenarios
+	// scoped to this endpoint's error interface are included.
 	statusText := make(map[int][]string)
 	for _, scenario := range fn.Root.Scenarios {
+		if scenario.Instance != nil && scenario.Instance != scopeType {
+			continue
+		}
 		code, err := strconv.Atoi(scenario.Tags.Get("http"))
 		if err != nil || code == 0 {
 			continue
